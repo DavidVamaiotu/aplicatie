@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "deploy": "npm run build && npx cap sync && git add . && git commit -m \"Auto-update\" && git push",
+    "ship": "npm run build && npx cap sync && git add . && git commit -m \"Update app\" && git push"
   },
   "dependencies": {
     "@capacitor/android": "^7.4.4",
