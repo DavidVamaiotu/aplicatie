@@ -383,7 +383,7 @@ img {
 }
 
 .pt-header {
-  padding-top: calc(env(safe-area-inset-top, 0px) + 5rem);
+  padding-top: calc(env(safe-area-inset-top, 0px) + 6rem);
 }
 
 .pb-safe {
