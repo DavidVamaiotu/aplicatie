@@ -7,6 +7,13 @@ const config: CapacitorConfig = {
     server: {
         url: 'https://marinapark.vercel.app/',
         cleartext: true
+    },
+    plugins: {
+        SplashScreen: {
+            launchShowDuration: 0,
+            launchAutoHide: true,
+            backgroundColor: "#f8f9fa"
+        }
     }
 };
 
