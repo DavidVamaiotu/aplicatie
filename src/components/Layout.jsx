@@ -24,7 +24,7 @@ const Layout = () => {
                 </header>
             )}
 
-            <main>
+            <main className={!isBookingPage ? 'pt-header' : ''}>
                 <Outlet />
             </main>
 

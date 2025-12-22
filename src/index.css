@@ -148,9 +148,11 @@ img {
    ===================================== */
 
 .top-header {
-  position: -webkit-sticky;
-  position: sticky;
+  position: fixed;
   top: 0;
+  left: 0;
+  right: 0;
+  width: 100%;
   z-index: 40;
   padding: 0.75rem 0;
   padding-top: calc(env(safe-area-inset-top, 0px) + 0.75rem);
@@ -378,6 +380,10 @@ img {
 
 .pt-safe {
   padding-top: calc(env(safe-area-inset-top, 24px) + 16px);
+}
+
+.pt-header {
+  padding-top: calc(env(safe-area-inset-top, 0px) + 4rem);
 }
 
 .pb-safe {
