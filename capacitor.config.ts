@@ -4,6 +4,7 @@ const config: CapacitorConfig = {
     appId: 'com.myapp.android',
     appName: 'Marina Park',
     webDir: 'dist',
+    backgroundColor: '#f8f9fa',
     server: {
         url: 'https://marinapark.vercel.app/',
         cleartext: true
