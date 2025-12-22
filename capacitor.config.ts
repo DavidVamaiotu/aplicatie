@@ -2,9 +2,12 @@ import { CapacitorConfig } from '@capacitor/cli';
 
 const config: CapacitorConfig = {
     appId: 'com.myapp.android',
-    appName: 'My App',
+    appName: 'Marina Park',
     webDir: 'dist',
-
+    server: {
+        url: 'https://marinapark.vercel.app/',
+        cleartext: true
+    }
 };
 
 export default config;
