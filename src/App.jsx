@@ -30,7 +30,7 @@ function AppContent() {
           await StatusBar.setStyle({ style: Style.Light });
           await StatusBar.setBackgroundColor({ color: '#FFFFFF' });
         } else {
-          // Other pages have green header - use white text
+          // Home and other pages - white text on green background
           await StatusBar.setStyle({ style: Style.Dark });
           await StatusBar.setBackgroundColor({ color: '#15803d' });
         }
