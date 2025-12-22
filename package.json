@@ -14,6 +14,7 @@
     "@capacitor/app": "^7.1.0",
     "@capacitor/cli": "^7.4.4",
     "@capacitor/core": "^7.4.4",
+    "@capacitor/splash-screen": "^7.0.4",
     "@capacitor/status-bar": "^7.0.3",
     "@capgo/capacitor-navigation-bar": "^7.3.17",
     "date-fns": "^4.1.0",

@@ -9,6 +9,7 @@ import BookingSuccess from './pages/BookingSuccess';
 
 import { App as CapacitorApp } from '@capacitor/app';
 import { StatusBar, Style } from '@capacitor/status-bar';
+import { SplashScreen } from '@capacitor/splash-screen';
 import { useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 
@@ -28,7 +29,18 @@ function AppContent() {
         console.log('StatusBar configuration failed', err);
       }
     };
+
     configureStatusBar();
+
+    // Hide the native splash screen once the app is ready
+    const hideSplash = async () => {
+      try {
+        await SplashScreen.hide();
+      } catch (err) {
+        console.log('Error hiding splash screen', err);
+      }
+    };
+    hideSplash();
 
     // Enable :active styles on mobile
     document.addEventListener('touchstart', () => { }, { passive: true });
