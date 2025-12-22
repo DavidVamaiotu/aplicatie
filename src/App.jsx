@@ -17,13 +17,23 @@ function AppContent() {
   const location = useLocation();
 
   useEffect(() => {
-    // Configure Status Bar
+    // Configure Status Bar based on current route
     const configureStatusBar = async () => {
       try {
+        const isBookingPage = location.pathname.startsWith('/book');
+
         await StatusBar.show();
         await StatusBar.setOverlaysWebView({ overlay: false });
-        await StatusBar.setStyle({ style: Style.Light });
-        await StatusBar.setBackgroundColor({ color: '#FFFFFF' });
+
+        if (isBookingPage) {
+          // Booking page has light background - use dark text
+          await StatusBar.setStyle({ style: Style.Light });
+          await StatusBar.setBackgroundColor({ color: '#FFFFFF' });
+        } else {
+          // Other pages have green header - use white text
+          await StatusBar.setStyle({ style: Style.Dark });
+          await StatusBar.setBackgroundColor({ color: '#15803d' });
+        }
       } catch (err) {
         console.log('StatusBar configuration failed', err);
       }
