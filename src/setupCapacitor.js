@@ -8,9 +8,11 @@ const setupCapacitor = async () => {
             await StatusBar.setStyle({ style: Style.Dark });
             await StatusBar.setOverlaysWebView({ overlay: true });
 
-            // Force navigation bar to be transparent. 
-            // Icon color is now handled by styles.xml (windowLightNavigationBar=true)
-            await NavigationBar.setTransparency({ isTransparent: true });
+            // Set navigation bar to green with white icons
+            await NavigationBar.setColor({
+                color: '#14532d',
+                darkButtons: false  // false = white icons
+            });
         } catch (e) {
             console.error("Error setting up Capacitor plugins", e);
         }
