@@ -15,7 +15,7 @@
         <item name="android:windowBackground">#f8f9fa</item>
         <item name="android:colorBackground">#f8f9fa</item>
         <item name="android:background">#f8f9fa</item>
-        <item name="android:windowLightNavigationBar">true</item>
+        <item name="android:windowLightNavigationBar">false</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
     </style>
 
