@@ -3765,3 +3765,439 @@ img {
 .success-home-button:active {
   transform: translateY(0);
 }
+
+/* =====================================
+   COMPREHENSIVE DARK MODE STYLES
+   ===================================== */
+
+/* Dark Mode - Utility Color Classes */
+.dark .text-gray-900 {
+  color: #f9fafb;
+}
+
+.dark .text-gray-700 {
+  color: #e5e7eb;
+}
+
+.dark .text-gray-600 {
+  color: #d1d5db;
+}
+
+.dark .text-gray-500 {
+  color: #9ca3af;
+}
+
+.dark .text-gray-400 {
+  color: #9ca3af;
+}
+
+/* Dark Mode - Background Gradient */
+.dark .bg-gradient-dark {
+  background: linear-gradient(180deg, #0a0f0d 0%, #0f1a15 50%, #1a2621 100%);
+}
+
+/* Dark Mode - Modern Card */
+.dark .modern-card {
+  background: #1a2621;
+  border-color: rgba(74, 222, 128, 0.15);
+  box-shadow:
+    0 4px 20px rgba(0, 0, 0, 0.3),
+    0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+.dark .modern-card:hover {
+  box-shadow:
+    0 8px 30px rgba(0, 0, 0, 0.4),
+    0 2px 6px rgba(0, 0, 0, 0.25);
+}
+
+/* Dark Mode - Section Divider */
+.dark .section-divider {
+  background: linear-gradient(90deg, transparent, rgba(74, 222, 128, 0.25), transparent);
+}
+
+/* Dark Mode - Section Titles */
+.dark .section-title {
+  color: #dcfce7;
+}
+
+.dark .section-heading {
+  color: #dcfce7;
+}
+
+.dark .section-subheading {
+  color: #86efac;
+}
+
+/* Dark Mode - Amenity Pills */
+.dark .amenity-pill {
+  background: linear-gradient(135deg, #14532d 0%, #1a2621 100%);
+  border-color: rgba(74, 222, 128, 0.25);
+  color: #dcfce7;
+}
+
+.dark .amenity-pill:hover {
+  border-color: var(--color-primary);
+  background: linear-gradient(135deg, #166534 0%, #14532d 100%);
+}
+
+/* Dark Mode - Highlight Items */
+.dark .highlight-item h3 {
+  color: #dcfce7;
+}
+
+.dark .highlight-item p {
+  color: #86efac;
+}
+
+.dark .highlight-icon {
+  background: linear-gradient(135deg, #14532d 0%, #166534 100%);
+}
+
+/* Dark Mode - Room Card */
+.dark .room-card {
+  background: #1a2621;
+  border-color: rgba(74, 222, 128, 0.1);
+}
+
+.dark .room-card-title {
+  color: #dcfce7;
+}
+
+.dark .room-card-description {
+  color: #86efac;
+}
+
+.dark .room-card-feature {
+  color: #9ca3af;
+}
+
+.dark .room-card-content {
+  background: #1a2621;
+}
+
+.dark .room-card-price-tag {
+  background: #0f1a15;
+}
+
+.dark .room-card-price-tag .price {
+  color: #dcfce7;
+}
+
+.dark .room-card-price-tag .per-night {
+  color: #86efac;
+}
+
+.dark .room-card-cta {
+  background: linear-gradient(135deg, #14532d 0%, #166534 100%);
+  border-color: rgba(74, 222, 128, 0.15);
+}
+
+/* Dark Mode - Dates Display */
+.dark .dates-display {
+  background: linear-gradient(135deg, #14532d 0%, #0f1a15 100%);
+  border-color: rgba(74, 222, 128, 0.15);
+}
+
+.dark .date-label {
+  color: #86efac;
+}
+
+.dark .date-day {
+  color: #6b7280;
+}
+
+/* Dark Mode - Guest Counter */
+.dark .guests-container {
+  background: linear-gradient(135deg, #0f1a15 0%, #1a2621 100%);
+  border-color: rgba(74, 222, 128, 0.1);
+}
+
+.dark .guest-label {
+  color: #86efac;
+}
+
+.dark .counter-buttons {
+  background: #0a0f0d;
+}
+
+.dark .counter-btn {
+  background: #1a2621;
+  border-color: rgba(74, 222, 128, 0.2);
+  color: #dcfce7;
+}
+
+.dark .counter-btn:hover {
+  background: var(--color-primary);
+  color: white;
+  border-color: var(--color-primary);
+}
+
+/* Dark Mode - Modern Select */
+.dark .modern-select {
+  background: linear-gradient(135deg, #0f1a15 0%, #1a2621 100%);
+  border-color: rgba(74, 222, 128, 0.2);
+  color: #dcfce7;
+}
+
+.dark .modern-select:focus {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 4px rgba(74, 222, 128, 0.15);
+}
+
+.dark .modern-select option {
+  background: #1a2621;
+  color: #dcfce7;
+}
+
+/* Dark Mode - Input Styles */
+.dark .input-label {
+  color: #dcfce7;
+}
+
+.dark .modern-input {
+  background: #0f1a15;
+  border-color: rgba(74, 222, 128, 0.2);
+  color: #dcfce7;
+}
+
+.dark .modern-input::placeholder {
+  color: #6b7280;
+}
+
+.dark .modern-input:focus {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 4px rgba(74, 222, 128, 0.15);
+}
+
+.dark .input-icon {
+  color: #6b7280;
+}
+
+/* Dark Mode - Input Field */
+.dark .input-field {
+  background-color: #1a2621;
+  border-color: rgba(74, 222, 128, 0.2);
+  color: #dcfce7;
+}
+
+.dark .input-field:focus {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 4px rgba(74, 222, 128, 0.15);
+}
+
+/* Dark Mode - Bottom Bar */
+.dark .bottom-bar {
+  background: linear-gradient(135deg, #0a0f0d 0%, #14532d 100%);
+  border-top-color: rgba(74, 222, 128, 0.2);
+}
+
+.dark .price-total {
+  color: #dcfce7;
+}
+
+.dark .price-label {
+  color: #86efac;
+}
+
+.dark .price-breakdown {
+  color: #6b7280;
+}
+
+.dark .price-cta {
+  color: #86efac;
+}
+
+/* Dark Mode - Info Banner */
+.dark .info-banner {
+  background: linear-gradient(135deg, #14532d 0%, #166534 100%);
+  border-color: rgba(74, 222, 128, 0.25);
+}
+
+.dark .info-banner-content h3 {
+  color: #dcfce7;
+}
+
+.dark .info-banner-content p {
+  color: #86efac;
+}
+
+/* Dark Mode - Category Buttons */
+.dark .category-container {
+  background: #1a2621;
+}
+
+.dark .category-btn {
+  color: #9ca3af;
+}
+
+.dark .category-btn:not(.active):hover {
+  background: #0f1a15;
+  color: var(--color-primary);
+}
+
+/* Dark Mode - See All Button */
+.dark .see-all-btn:hover {
+  background: rgba(74, 222, 128, 0.15);
+}
+
+/* Dark Mode - Calendar (RDP) */
+.dark .rdp-root {
+  background-color: #1a2621;
+  border-color: rgba(74, 222, 128, 0.2);
+}
+
+.dark .rdp {
+  background-color: #1a2621;
+  border-color: rgba(74, 222, 128, 0.2);
+}
+
+.dark .rdp-month_caption {
+  color: #dcfce7;
+}
+
+.dark .rdp-weekday {
+  color: #86efac;
+}
+
+.dark .rdp-day {
+  color: #dcfce7;
+}
+
+.dark .rdp-day_button:hover {
+  background-color: rgba(74, 222, 128, 0.2);
+}
+
+.dark .rdp-today {
+  background-color: rgba(74, 222, 128, 0.3);
+}
+
+.dark .rdp-disabled {
+  color: #4b5563;
+}
+
+.dark .rdp-chevron {
+  fill: #4ade80 !important;
+}
+
+.dark .rdp-nav_button {
+  color: #4ade80 !important;
+}
+
+/* Dark Mode - Account Page Specific */
+.dark .account-page {
+  background: linear-gradient(180deg, #0a0f0d 0%, #0f1a15 100%);
+}
+
+.dark .account-content {
+  background: transparent;
+}
+
+.dark .account-stats {
+  background: transparent;
+}
+
+.dark .stat-card {
+  background: #1a2621;
+  border-color: rgba(74, 222, 128, 0.1);
+}
+
+.dark .stat-value {
+  color: #dcfce7;
+}
+
+.dark .stat-label {
+  color: #86efac;
+}
+
+.dark .settings-card {
+  background: #1a2621;
+  border-color: rgba(74, 222, 128, 0.1);
+}
+
+.dark .profile-card {
+  background: rgba(26, 38, 33, 0.9);
+  border-color: rgba(74, 222, 128, 0.15);
+}
+
+.dark .profile-name {
+  color: #dcfce7;
+}
+
+.dark .profile-email {
+  color: #86efac;
+}
+
+.dark .profile-email span {
+  color: #86efac;
+}
+
+.dark .bookings-list {
+  background: transparent;
+}
+
+.dark .booking-card {
+  background: #1a2621;
+  border-color: rgba(74, 222, 128, 0.1);
+}
+
+.dark .booking-title {
+  color: #dcfce7;
+}
+
+.dark .booking-detail {
+  color: #86efac;
+}
+
+.dark .booking-detail span {
+  color: #86efac;
+}
+
+.dark .booking-nights {
+  color: #9ca3af;
+}
+
+.dark .booking-price {
+  color: #dcfce7;
+}
+
+/* Dark Mode - Skeleton Loading */
+.dark .skeleton-shimmer {
+  background: linear-gradient(90deg,
+      #1a2621 0%,
+      #243029 50%,
+      #1a2621 100%);
+}
+
+/* Dark Mode - Glass Effects */
+.dark .glass-button {
+  background: rgba(26, 38, 33, 0.9);
+  border-color: rgba(74, 222, 128, 0.2);
+}
+
+.dark .glass-button:hover {
+  background: rgba(26, 38, 33, 1);
+}
+
+.dark .glass-button svg {
+  color: #dcfce7;
+}
+
+/* Dark Mode - Scrollbar */
+.dark ::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.dark ::-webkit-scrollbar-track {
+  background: #0a0f0d;
+}
+
+.dark ::-webkit-scrollbar-thumb {
+  background: #166534;
+  border-radius: 4px;
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: #22c55e;
+}

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Settings, Bell, Moon, LogOut, Calendar, MapPin, Clock, ChevronRight, User, Mail, Shield, HelpCircle, Star } from 'lucide-react';
+import { useTheme } from '../context/ThemeContext';
 
 const mockBookings = [
     {
@@ -32,23 +33,7 @@ const mockBookings = [
 ];
 
 const Account = () => {
-    const [darkMode, setDarkMode] = useState(() => {
-        const saved = localStorage.getItem('darkMode');
-        return saved === 'true';
-    });
-
-    useEffect(() => {
-        localStorage.setItem('darkMode', darkMode);
-        if (darkMode) {
-            document.documentElement.classList.add('dark');
-        } else {
-            document.documentElement.classList.remove('dark');
-        }
-    }, [darkMode]);
-
-    const toggleDarkMode = () => {
-        setDarkMode(!darkMode);
-    };
+    const { darkMode, toggleDarkMode } = useTheme();
 
     const settingsItems = [
         { icon: User, label: 'Editează Profilul', hasArrow: true },

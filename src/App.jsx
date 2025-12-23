@@ -6,6 +6,7 @@ import Camping from './pages/Camping';
 import Account from './pages/Account';
 import BookingPage from './pages/BookingPage';
 import BookingSuccess from './pages/BookingSuccess';
+import { ThemeProvider } from './context/ThemeContext';
 
 import { App as CapacitorApp } from '@capacitor/app';
 import { StatusBar, Style } from '@capacitor/status-bar';
@@ -67,9 +68,11 @@ function AppContent() {
 
 function App() {
   return (
-    <BrowserRouter>
-      <AppContent />
-    </BrowserRouter>
+    <ThemeProvider>
+      <BrowserRouter>
+        <AppContent />
+      </BrowserRouter>
+    </ThemeProvider>
   );
 }
 
