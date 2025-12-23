@@ -9,7 +9,7 @@ const setupCapacitor = async () => {
             await StatusBar.setOverlaysWebView({ overlay: true });
 
             // Set navigation bar to green with white icons
-            await NavigationBar.setColor({
+            await NavigationBar.setNavigationBarColor({
                 color: '#14532d',
                 darkButtons: false  // false = white icons
             });
