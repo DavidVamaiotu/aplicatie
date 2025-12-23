@@ -38,7 +38,7 @@ const Home = () => {
                         Marina Park
                     </h1>
                     <p className="hero-subtitle animate-slide-up" style={{ animationDelay: '0.2s' }}>
-                        Cazarea perfectă pentru vacanța ta la mare
+                        Cazarea potrivită pentru vacanța ta la mare
                     </p>
                 </div>
                 <div className="hero-wave">
@@ -90,7 +90,7 @@ const Home = () => {
                     <div className="info-banner">
                         <div className="info-banner-icon">🌊</div>
                         <div className="info-banner-content">
-                            <h3>La doar 2 minute de plajă</h3>
+                            <h3>La doar 5 minute de plajă</h3>
                             <p>Bucură-te de acces rapid la plaja din Vama Veche</p>
                         </div>
                     </div>
