@@ -17,7 +17,7 @@ const RoomCard = ({ room, onBook }) => {
                 {/* Price Tag */}
                 <div className="room-card-price-tag">
                     <span className="price">{room.price}</span>
-                    <span className="per-night">/ noapte</span>
+                    <span className="per-night"> / noapte</span>
                 </div>
             </div>
 
