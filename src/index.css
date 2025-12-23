@@ -2811,6 +2811,11 @@ img {
   color: white !important;
 }
 
+.navbar-icon svg {
+  stroke: white !important;
+  color: white !important;
+}
+
 .navbar-item.active .navbar-icon {
   transform: scale(1.1);
 }
