@@ -12,6 +12,7 @@
     "ship": "npm run build && npx cap sync && git add . && git commit -m \"Update app\" && git push"
   },
   "dependencies": {
+    "@capacitor-firebase/authentication": "^7.5.0",
     "@capacitor/android": "^7.4.4",
     "@capacitor/app": "^7.1.0",
     "@capacitor/cli": "^7.4.4",

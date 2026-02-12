@@ -1,0 +1,47 @@
+{
+    "project_info": {
+        "project_number": "595568513962",
+        "project_id": "marina-park-booking-app",
+        "storage_bucket": "marina-park-booking-app.firebasestorage.app"
+    },
+    "client": [
+        {
+            "client_info": {
+                "mobilesdk_app_id": "1:595568513962:android:1ed1a5fd82f774f95a11d3",
+                "android_client_info": {
+                    "package_name": "com.myapp.android"
+                }
+            },
+            "oauth_client": [
+                {
+                    "client_id": "595568513962-erf27d86v5cm5goqoahj4rfq25iqvsah.apps.googleusercontent.com",
+                    "client_type": 1,
+                    "android_info": {
+                        "package_name": "com.myapp.android",
+                        "certificate_hash": "608d36515dd88e38803409135c857e8c8ce2138f"
+                    }
+                },
+                {
+                    "client_id": "595568513962-j1ie9q8e3ajlj6tkh0qam9bcs6ogijk4.apps.googleusercontent.com",
+                    "client_type": 3
+                }
+            ],
+            "api_key": [
+                {
+                    "current_key": "AIzaSyCT4d_jl3LuqPG3n0XJLebVYYoKwyokblc"
+                }
+            ],
+            "services": {
+                "appinvite_service": {
+                    "other_platform_oauth_client": [
+                        {
+                            "client_id": "595568513962-j1ie9q8e3ajlj6tkh0qam9bcs6ogijk4.apps.googleusercontent.com",
+                            "client_type": 3
+                        }
+                    ]
+                }
+            }
+        }
+    ],
+    "configuration_version": "1"
+}

@@ -3,18 +3,16 @@ import {
     onAuthStateChanged,
     signInWithEmailAndPassword,
     createUserWithEmailAndPassword,
-    signInWithPopup,
-    signInWithRedirect,
-    getRedirectResult,
+    signInWithCredential,
     GoogleAuthProvider,
     updateProfile as fbUpdateProfile,
     signOut
 } from 'firebase/auth';
+import { FirebaseAuthentication } from '@capacitor-firebase/authentication';
 import { auth } from '../firebase';
 import { saveUserProfile } from '../services/userService';
 
 const AuthContext = createContext(undefined);
-const googleProvider = new GoogleAuthProvider();
 
 // Cache key for instant-load on cold start
 const USER_CACHE_KEY = 'marina_park_user_cache';
@@ -81,9 +79,6 @@ export const AuthProvider = ({ children }) => {
             setLoading(false);
         });
 
-        // Check for redirect result (for mobile Google sign-in)
-        getRedirectResult(auth).catch(() => { });
-
         return () => unsubscribe();
     }, []);
 
@@ -115,24 +110,30 @@ export const AuthProvider = ({ children }) => {
         }
     };
 
-    // Google sign in
+    // Google sign in — uses native Capacitor plugin
+    // The plugin opens the native Google Sign-In dialog (no WebView popup)
+    // and returns an ID token, which we pass to Firebase Auth
     const loginWithGoogle = async () => {
         setAuthError(null);
         try {
-            // Try popup first, fall back to redirect for mobile
-            try {
-                const result = await signInWithPopup(auth, googleProvider);
-                return result.user;
-            } catch (popupError) {
-                if (popupError.code === 'auth/popup-blocked' ||
-                    popupError.code === 'auth/popup-closed-by-user') {
-                    await signInWithRedirect(auth, googleProvider);
-                } else {
-                    throw popupError;
-                }
+            // 1. Native Google sign-in via Capacitor plugin
+            const result = await FirebaseAuthentication.signInWithGoogle();
+
+            // 2. Get the ID token from the native result
+            const idToken = result.credential?.idToken;
+            if (!idToken) {
+                throw new Error('No ID token received from Google Sign-In');
             }
+
+            // 3. Create a Firebase credential and sign in
+            const credential = GoogleAuthProvider.credential(idToken);
+            const firebaseResult = await signInWithCredential(auth, credential);
+            return firebaseResult.user;
         } catch (error) {
-            setAuthError(getErrorMessage(error.code));
+            const message = error.code
+                ? getErrorMessage(error.code)
+                : (error.message || 'Autentificarea Google a eșuat.');
+            setAuthError(message);
             throw error;
         }
     };
