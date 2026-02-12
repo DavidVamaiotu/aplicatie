@@ -21,7 +21,7 @@ const Camping = () => {
     }, []);
 
     const handleBook = (spot) => {
-        navigate(`/book/camping/${spot.id}`);
+        navigate(`/book-camping/${spot.id}`);
     };
 
     return (

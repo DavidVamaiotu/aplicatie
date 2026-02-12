@@ -5,8 +5,11 @@ import Home from './pages/Home';
 import Camping from './pages/Camping';
 import Account from './pages/Account';
 import BookingPage from './pages/BookingPage';
+import CampingBookingPage from './pages/CampingBookingPage';
 import BookingSuccess from './pages/BookingSuccess';
+import LoginPage from './pages/LoginPage';
 import { ThemeProvider } from './context/ThemeContext';
+import { AuthProvider } from './context/AuthContext';
 
 import { App as CapacitorApp } from '@capacitor/app';
 import { StatusBar, Style } from '@capacitor/status-bar';
@@ -55,11 +58,13 @@ function AppContent() {
 
   return (
     <Routes>
+      <Route path="/login" element={<LoginPage />} />
       <Route path="/" element={<Layout />}>
         <Route index element={<Home />} />
         <Route path="camping" element={<Camping />} />
         <Route path="account" element={<Account />} />
         <Route path="book/:type/:id" element={<BookingPage />} />
+        <Route path="book-camping/:id" element={<CampingBookingPage />} />
       </Route>
       <Route path="/booking-success" element={<BookingSuccess />} />
     </Routes>
@@ -69,9 +74,11 @@ function AppContent() {
 function App() {
   return (
     <ThemeProvider>
-      <BrowserRouter>
-        <AppContent />
-      </BrowserRouter>
+      <AuthProvider>
+        <BrowserRouter>
+          <AppContent />
+        </BrowserRouter>
+      </AuthProvider>
     </ThemeProvider>
   );
 }

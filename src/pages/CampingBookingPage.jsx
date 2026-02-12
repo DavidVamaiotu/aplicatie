@@ -15,7 +15,7 @@ const capitalizeFirstLetter = (string) => {
     return string.charAt(0).toUpperCase() + string.slice(1);
 };
 
-const BookingPage = () => {
+const CampingBookingPage = () => {
     const { id } = useParams();
     const navigate = useNavigate();
     const { user } = useAuth();
@@ -26,7 +26,8 @@ const BookingPage = () => {
         firstName: '',
         lastName: '',
         email: '',
-        phone: ''
+        phone: '',
+        licensePlate: ''
     });
 
     // Auto-fill from logged-in user
@@ -45,9 +46,6 @@ const BookingPage = () => {
     const [item, setItem] = useState(null);
     const [loading, setLoading] = useState(false);
     const [fetchingItem, setFetchingItem] = useState(true);
-    const [fullyBookedDates, setFullyBookedDates] = useState([]);
-    const [allUnits, setAllUnits] = useState([]);
-    const [selectedUnit, setSelectedUnit] = useState(null);
     const [showSuccessModal, setShowSuccessModal] = useState(false);
     const [bookingResult, setBookingResult] = useState(null);
 
@@ -55,30 +53,10 @@ const BookingPage = () => {
         const fetchItem = async () => {
             const data = await getItemById(id);
             setItem(data);
-
-            // Fetch fully booked dates for this room type
-            if (data) {
-                const { getUnavailableDatesForRoom } = await import('../data/units');
-                const dates = await getUnavailableDatesForRoom(data.id);
-                setFullyBookedDates(dates);
-            }
-
             setFetchingItem(false);
         };
         fetchItem();
     }, [id]);
-
-    // Fetch all units when item loads
-    React.useEffect(() => {
-        const fetchUnits = async () => {
-            if (item) {
-                const { getUnitsForRoom } = await import('../data/units');
-                const units = await getUnitsForRoom(item.id);
-                setAllUnits(units);
-            }
-        };
-        fetchUnits();
-    }, [item]);
 
     if (fetchingItem) return (
         <div className="min-h-screen flex items-center justify-center bg-gradient-dark">
@@ -86,6 +64,8 @@ const BookingPage = () => {
         </div>
     );
     if (!item) return <div className="min-h-screen flex items-center justify-center">Item not found</div>;
+
+    const totalGuests = guests.adults + guests.children;
 
     const handleSubmit = async (e) => {
         e.preventDefault();
@@ -100,22 +80,11 @@ const BookingPage = () => {
             return;
         }
 
-        if (!selectedUnit) {
-            alert('Te rugăm să alegi o cameră!');
-            return;
-        }
-
-        // Validate availability for the selected unit
+        // Build dates array
         const dates = [];
         let currentDate = new Date(range.from);
         const endDate = new Date(range.to);
 
-        // IMPORTANT: We book DAYS (inclusive of checkout), as per user request.
-        // Loop runs while currentDate <= endDate.
-        // Times are added per API requirements:
-        // - Check-in (first date): 15:00:01 (from 15:00)
-        // - Check-out (last date): 12:00:02 (until 12:00)
-        // - Middle dates: 00:00:00
         let dateIndex = 0;
         const totalDates = Math.ceil((endDate - new Date(range.from)) / (1000 * 60 * 60 * 24)) + 1;
 
@@ -123,13 +92,10 @@ const BookingPage = () => {
             const dateStr = format(currentDate, 'yyyy-MM-dd');
 
             if (dateIndex === 0) {
-                // First date: check-in time 15:00:01
                 dates.push(`${dateStr} 15:00:01`);
             } else if (dateIndex === totalDates - 1) {
-                // Last date: check-out time 12:00:02
                 dates.push(`${dateStr} 12:00:02`);
             } else {
-                // Middle dates: 00:00:00
                 dates.push(`${dateStr} 00:00:00`);
             }
 
@@ -137,38 +103,25 @@ const BookingPage = () => {
             dateIndex++;
         }
 
-
-
         setLoading(true);
 
         try {
-            // Format dates as array of strings YYYY-MM-DD
-            // Dates array is already prepared above for validation
-
             const bookingData = {
                 dates: dates,
                 name: guestDetails.firstName,
                 last_name: guestDetails.lastName,
                 email: guestDetails.email,
                 phone: guestDetails.phone,
-                resource_id: parseInt(selectedUnit.id), // WordPress resource ID
-                unit_id: selectedUnit.id,
-                // Check-in from 15:00, Check-out until 12:00
+                resource_id: item.id,
+                adults: guests.adults,
+                children: guests.children,
+                license_plate: guestDetails.licensePlate || '',
                 check_in: '15:00',
                 check_out: '12:00'
             };
 
             const result = await createBooking(bookingData);
-            console.log('Booking created:', result);
-
-            // Mark dates as unavailable in Firestore (non-blocking)
-            try {
-                const { markUnitAsUnavailable } = await import('../data/units');
-                await markUnitAsUnavailable(item.id, selectedUnit.id, dates, result.booking_id);
-                console.log('Dates marked as unavailable');
-            } catch (firestoreError) {
-                console.error('Firestore update failed (non-critical):', firestoreError);
-            }
+            console.log('Camping booking created:', result);
 
             // Save booking to user's Firestore history (if logged in)
             if (user?.uid) {
@@ -178,11 +131,10 @@ const BookingPage = () => {
                     await saveBookingToUser(user.uid, {
                         bookingId: result.booking_id,
                         itemTitle: item.title,
-                        unitName: selectedUnit.name,
                         dates: `${format(range.from, 'dd MMM')} - ${format(range.to, 'dd MMM yyyy')}`,
                         nights,
                         guests,
-                        totalPrice: nights * pricePerNight,
+                        totalPrice: totalGuests * nights * pricePerNight,
                         status: 'confirmed'
                     });
                 } catch (saveErr) {
@@ -190,11 +142,10 @@ const BookingPage = () => {
                 }
             }
 
-            // Navigate to success page with booking data
             navigate('/booking-success', {
                 state: {
                     bookingId: result.booking_id,
-                    unitName: selectedUnit.name,
+                    unitName: item.title,
                     guests: guests
                 }
             });
@@ -205,13 +156,6 @@ const BookingPage = () => {
             setLoading(false);
         }
     };
-
-    // Determine which unavailable dates to show
-    // If a unit is selected, show its specific unavailable dates (derived from bookings in BookingCalendar).
-    // Otherwise, show dates where ALL units are booked (fullyBookedDates state).
-    const datesToDisable = selectedUnit ? [] : fullyBookedDates;
-
-
 
     return (
         <div className="min-h-screen bg-gradient-dark pb-40">
@@ -311,46 +255,13 @@ const BookingPage = () => {
                         Selectează Perioada
                     </h2>
 
-                    {/* Room Selection - Enhanced */}
-                    {allUnits.length > 0 && (
-                        <div className="modern-card p-6 animate-slide-up" style={{ animationDelay: '0.1s' }}>
-                            <h2 className="font-bold text-lg text-gray-900 mb-4 flex items-center gap-2">
-                                <Key size={18} className="text-primary" />
-                                Alege Camera
-                            </h2>
-                            <div className="relative">
-                                <select
-                                    value={selectedUnit?.id || ''}
-                                    onChange={async (e) => {
-                                        const unitId = e.target.value;
-                                        const { getUnit } = await import('../data/units');
-                                        const unit = await getUnit(item.id, unitId);
-                                        setSelectedUnit(unit);
-                                        setRange(undefined);
-                                    }}
-                                    className="modern-select"
-                                >
-                                    <option value="" disabled>Selectează o cameră...</option>
-                                    {allUnits.map((unit) => (
-                                        <option key={unit.id} value={unit.id}>
-                                            {unit.name}
-                                        </option>
-                                    ))}
-                                </select>
-                                <div className="select-arrow">
-                                    <ChevronDown size={20} />
-                                </div>
-                            </div>
-                        </div>
-                    )}
-
-                    {/* Calendar & Guest Selection - Enhanced Card */}
+                    {/* Calendar & Guest Selection - Enhanced Card (No unit selection for camping) */}
                     <div className="modern-card p-6 flex flex-col gap-8 animate-slide-up" style={{ animationDelay: '0.2s' }}>
                         {/* Calendar */}
                         <div className="flex justify-center">
                             <BookingCalendar
-                                unavailableDates={datesToDisable}
-                                bookings={selectedUnit?.bookings || []}
+                                unavailableDates={[]}
+                                bookings={[]}
                                 selected={range}
                                 onSelect={setRange}
                             />
@@ -510,6 +421,25 @@ const BookingPage = () => {
                                     />
                                 </div>
                             </div>
+
+                            {/* License Plate - Optional */}
+                            <div className="input-group">
+                                <label htmlFor="licensePlate" className="input-label">
+                                    Număr Înmatriculare <span className="text-gray-400 font-normal">(opțional)</span>
+                                </label>
+                                <div className="input-wrapper">
+                                    <Car size={18} className="input-icon" />
+                                    <input
+                                        id="licensePlate"
+                                        type="text"
+                                        name="licensePlate"
+                                        placeholder="ex: B 123 ABC"
+                                        value={guestDetails.licensePlate}
+                                        onChange={(e) => setGuestDetails({ ...guestDetails, licensePlate: e.target.value })}
+                                        className="modern-input"
+                                    />
+                                </div>
+                            </div>
                         </form>
                     </div>
                 </div>
@@ -522,7 +452,7 @@ const BookingPage = () => {
                         {range?.from && range?.to ? (() => {
                             const nights = differenceInDays(range.to, range.from);
                             const pricePerNight = parseInt(item.price.replace(/[^0-9]/g, ''));
-                            const totalPrice = nights * pricePerNight;
+                            const totalPrice = totalGuests * nights * pricePerNight;
                             return (
                                 <>
                                     <div className="flex items-baseline gap-2">
@@ -530,7 +460,7 @@ const BookingPage = () => {
                                         <span className="price-label">total</span>
                                     </div>
                                     <p className="price-breakdown">
-                                        {nights} {nights === 1 ? 'noapte' : 'nopți'} × {item.price}
+                                        {totalGuests} {totalGuests === 1 ? 'persoană' : 'persoane'} × {nights} {nights === 1 ? 'noapte' : 'nopți'} × {pricePerNight} RON
                                     </p>
                                 </>
                             );
@@ -538,7 +468,7 @@ const BookingPage = () => {
                             <>
                                 <div className="flex items-baseline gap-2">
                                     <span className="price-total">{item.price}</span>
-                                    <span className="price-label">/ noapte</span>
+                                    <span className="price-label">/ noapte / pers.</span>
                                 </div>
                                 <p className="price-cta">Selectează datele</p>
                             </>
@@ -586,4 +516,4 @@ const BookingPage = () => {
     );
 };
 
-export default BookingPage;
+export default CampingBookingPage;
