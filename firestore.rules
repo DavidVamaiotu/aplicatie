@@ -21,5 +21,32 @@ service cloud.firestore {
           request.resource.data.bookings.toSet().hasAll(resource.data.bookings.toSet());
       }
     }
+
+    // ─── Users ──────────────────────────────────────────────────────
+    // Authenticated users can read/write their own document
+    match /users/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+
+      // Bookings subcollection — user can read/write their own
+      match /bookings/{bookingId} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
+    }
+
+    // ─── Campaigns (Promotions) ─────────────────────────────────────
+    // Clients can read only active, unexpired campaigns
+    // Only admins can create/update/delete
+    match /campaigns/{campaignId} {
+      allow read: if resource.data.isActive == true 
+                  && resource.data.validUntil > request.time;
+      allow write: if request.auth != null 
+                   && request.auth.token.admin == true;
+    }
+
+    // ─── Discount Usages ────────────────────────────────────────────
+    // Clients CANNOT read or write. Only Cloud Functions can mutate.
+    match /discount_usages/{usageId} {
+      allow read, write: if false;
+    }
   }
 }

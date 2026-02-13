@@ -1,6 +1,7 @@
 import { initializeApp } from "firebase/app";
 import { getFirestore, enableMultiTabIndexedDbPersistence } from "firebase/firestore";
 import { getAuth } from "firebase/auth";
+import { getFunctions } from "firebase/functions";
 
 const firebaseConfig = {
     apiKey: "AIzaSyCw1KLPe9Jk7ZIfVH0aYgbKBKIxzaiFW9Q",
@@ -14,6 +15,7 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app);
 export const auth = getAuth(app);
+export const functions = getFunctions(app, "europe-west1");
 
 // Enable offline persistence for Firestore
 enableMultiTabIndexedDbPersistence(db).catch((err) => {

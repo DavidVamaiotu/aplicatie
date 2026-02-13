@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Settings, Bell, Moon, LogOut, Calendar, MapPin, Clock, ChevronRight, User, Mail, Shield, HelpCircle, Star, ArrowRight, Sparkles } from 'lucide-react';
+import { Settings, Bell, Moon, LogOut, Calendar, MapPin, Clock, ChevronRight, User, Mail, Shield, HelpCircle, Star, ArrowRight, Sparkles, Tag, Percent, Gift } from 'lucide-react';
 import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
 import { getUserBookings } from '../services/userService';
+import { fetchUserDiscounts } from '../services/discountService';
 import { useLocalCache } from '../hooks/useLocalCache';
 
 const Account = () => {
@@ -14,6 +15,29 @@ const Account = () => {
     const [bookings, setBookings] = useState([]);
     const [loadingBookings, setLoadingBookings] = useState(false);
     const [cachedBookings, setCachedBookings] = useLocalCache('user_bookings_cache', [], 5 * 60 * 1000); // 5 min TTL
+
+    const [discounts, setDiscounts] = useState([]);
+    const [loadingDiscounts, setLoadingDiscounts] = useState(false);
+
+    // Fetch discounts when user is logged in
+    useEffect(() => {
+        if (!user?.uid) {
+            setDiscounts([]);
+            return;
+        }
+        const loadDiscounts = async () => {
+            setLoadingDiscounts(true);
+            try {
+                const data = await fetchUserDiscounts();
+                setDiscounts(data);
+            } catch (err) {
+                console.error('Failed to fetch discounts:', err);
+            } finally {
+                setLoadingDiscounts(false);
+            }
+        };
+        loadDiscounts();
+    }, [user?.uid]);
 
     // Fetch bookings when user is logged in
     useEffect(() => {
@@ -211,6 +235,69 @@ const Account = () => {
                     <div className="stat-card">
                         <div className="stat-value">{stats.totalSpent}</div>
                         <div className="stat-label">RON Total</div>
+                    </div>
+                </div>
+
+                {/* Discounts Section */}
+                <div className="discounts-section">
+                    <h3 className="section-title">
+                        <Tag size={18} />
+                        Reducerile Mele
+                    </h3>
+                    <div className="discounts-list">
+                        {loadingDiscounts ? (
+                            <div className="modern-card p-6" style={{ textAlign: 'center' }}>
+                                <div className="loading-spinner" style={{ margin: '0 auto' }}></div>
+                                <p className="text-sm text-gray-500 mt-3">Se caută reduceri disponibile...</p>
+                            </div>
+                        ) : discounts.length === 0 ? (
+                            <div className="modern-card p-6" style={{ textAlign: 'center' }}>
+                                <Gift size={40} className="text-gray-300" style={{ margin: '0 auto 12px' }} />
+                                <p className="text-sm text-gray-500">Nu ai reduceri disponibile momentan.</p>
+                                <p className="text-xs text-gray-400 mt-1">Reducerile apar automat când ești eligibil.</p>
+                            </div>
+                        ) : (
+                            discounts.map((discount, index) => (
+                                <div
+                                    key={discount.id}
+                                    className="discount-card"
+                                    style={{ animationDelay: `${index * 0.1}s` }}
+                                >
+                                    <div className="discount-card-header">
+                                        <div className="discount-badge-icon">
+                                            <Percent size={20} />
+                                        </div>
+                                        <div className="discount-card-info">
+                                            <h4 className="discount-card-name">{discount.name}</h4>
+                                            <span className="discount-card-value">
+                                                {discount.discountType === 'percentage'
+                                                    ? `-${discount.discountValue}%`
+                                                    : `-${discount.discountValue} RON`
+                                                }
+                                            </span>
+                                        </div>
+                                    </div>
+                                    <div className="discount-card-details">
+                                        {discount.roomTags && discount.roomTags.length > 0 && (
+                                            <div className="discount-detail">
+                                                <MapPin size={14} />
+                                                <span>Camere: {discount.roomTags.join(', ')}</span>
+                                            </div>
+                                        )}
+                                        <div className="discount-detail">
+                                            <Clock size={14} />
+                                            <span>Valabil până la {new Date(discount.validUntil).toLocaleDateString('ro-RO')}</span>
+                                        </div>
+                                        {discount.usesRemaining !== null && (
+                                            <div className="discount-detail">
+                                                <Sparkles size={14} />
+                                                <span>{discount.usesRemaining} {discount.usesRemaining === 1 ? 'utilizare rămasă' : 'utilizări rămase'}</span>
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            ))
+                        )}
                     </div>
                 </div>
 

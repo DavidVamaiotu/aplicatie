@@ -2,13 +2,14 @@ import React, { useState, useEffect } from 'react';
 import { createBooking } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { saveBookingToUser } from '../services/userService';
+import { fetchUserDiscounts, getRoomDiscounts, getBestDiscount, applyDiscountToOrder } from '../services/discountService';
 import { useParams, useNavigate } from 'react-router-dom';
 import { format, addDays, isSameDay, differenceInDays } from 'date-fns';
 import { getItemById } from '../data/rooms';
 import Button from '../components/Button';
 import BookingCalendar from "../components/BookingCalendar";
 import SuccessModal from '../components/SuccessModal';
-import { X, ArrowRight, Minus, Plus, Share, Wifi, Tv, Flame, Wind, Utensils, Key, Award, Clock, User, Mail, Phone, Sparkles, Calendar, Users, ChevronDown, MapPin, Car, TreePine } from 'lucide-react';
+import { X, ArrowRight, Minus, Plus, Share, Wifi, Tv, Flame, Wind, Utensils, Key, Award, Clock, User, Mail, Phone, Sparkles, Calendar, Users, ChevronDown, MapPin, Car, TreePine, Tag, Percent } from 'lucide-react';
 import 'react-day-picker/dist/style.css';
 
 const capitalizeFirstLetter = (string) => {
@@ -50,6 +51,34 @@ const BookingPage = () => {
     const [selectedUnit, setSelectedUnit] = useState(null);
     const [showSuccessModal, setShowSuccessModal] = useState(false);
     const [bookingResult, setBookingResult] = useState(null);
+
+    // Discount state
+    const [userDiscounts, setUserDiscounts] = useState([]);
+    const [roomDiscounts, setRoomDiscounts] = useState([]);
+
+    // Fetch discounts when user is logged in
+    useEffect(() => {
+        if (!user?.uid) return;
+        const loadDiscounts = async () => {
+            try {
+                const allDiscounts = await fetchUserDiscounts();
+                setUserDiscounts(allDiscounts);
+            } catch (err) {
+                console.error('Failed to fetch discounts:', err);
+            }
+        };
+        loadDiscounts();
+    }, [user?.uid]);
+
+    // Filter discounts for the current room whenever item or discounts change
+    useEffect(() => {
+        if (item && userDiscounts.length > 0) {
+            const applicable = getRoomDiscounts(userDiscounts, item.id);
+            setRoomDiscounts(applicable);
+        } else {
+            setRoomDiscounts([]);
+        }
+    }, [item, userDiscounts]);
 
     React.useEffect(() => {
         const fetchItem = async () => {
@@ -248,6 +277,28 @@ const BookingPage = () => {
                     <div>
                         <h1 className="text-2xl font-bold text-gray-900 mb-3 leading-tight">{item.title}</h1>
                     </div>
+
+                    {/* Discount Banner */}
+                    {roomDiscounts.length > 0 && (
+                        <div className="discount-banner animate-slide-up">
+                            <div className="discount-banner-icon">
+                                <Tag size={18} />
+                            </div>
+                            <div className="discount-banner-content">
+                                {roomDiscounts.map((d, i) => (
+                                    <div key={d.id} className="discount-banner-item">
+                                        <span className="discount-banner-name">{d.name}</span>
+                                        <span className="discount-banner-value">
+                                            {d.discountType === 'percentage'
+                                                ? `-${d.discountValue}%`
+                                                : `-${d.discountValue} RON`
+                                            }
+                                        </span>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
 
                     <div className="section-divider"></div>
 
@@ -523,14 +574,25 @@ const BookingPage = () => {
                             const nights = differenceInDays(range.to, range.from);
                             const pricePerNight = parseInt(item.price.replace(/[^0-9]/g, ''));
                             const totalPrice = nights * pricePerNight;
+                            const { bestDiscount, finalPrice, savings } = getBestDiscount(roomDiscounts, totalPrice);
                             return (
                                 <>
                                     <div className="flex items-baseline gap-2">
-                                        <span className="price-total">{totalPrice} RON</span>
+                                        {bestDiscount ? (
+                                            <>
+                                                <span className="price-original">{totalPrice} RON</span>
+                                                <span className="price-discounted">{finalPrice} RON</span>
+                                            </>
+                                        ) : (
+                                            <span className="price-total">{totalPrice} RON</span>
+                                        )}
                                         <span className="price-label">total</span>
                                     </div>
                                     <p className="price-breakdown">
                                         {nights} {nights === 1 ? 'noapte' : 'nopți'} × {item.price}
+                                        {bestDiscount && (
+                                            <span className="price-savings"> (-{savings} RON)</span>
+                                        )}
                                     </p>
                                 </>
                             );

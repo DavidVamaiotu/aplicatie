@@ -1,14 +1,29 @@
 import { db } from '../firebase';
-import { doc, getDoc, setDoc, collection, getDocs, addDoc, query, orderBy } from 'firebase/firestore';
+import { doc, getDoc, setDoc, collection, getDocs, addDoc, query, orderBy, updateDoc, increment } from 'firebase/firestore';
 
 /**
  * Save or update user profile in Firestore.
  * Uses set with merge to avoid overwriting existing data.
+ * Automatically sets accountCreatedAt on first save for the rules engine.
  */
 export const saveUserProfile = async (uid, data) => {
     try {
         const userRef = doc(db, 'users', uid);
-        await setDoc(userRef, data, { merge: true });
+        const existingDoc = await getDoc(userRef);
+
+        const profileData = { ...data };
+
+        // Set accountCreatedAt only on first save (for rules engine date_math)
+        if (!existingDoc.exists() || !existingDoc.data()?.accountCreatedAt) {
+            profileData.accountCreatedAt = new Date().toISOString();
+        }
+
+        // Initialize orderCount if not present
+        if (!existingDoc.exists() || existingDoc.data()?.orderCount === undefined) {
+            profileData.orderCount = existingDoc.exists() ? (existingDoc.data()?.orderCount || 0) : 0;
+        }
+
+        await setDoc(userRef, profileData, { merge: true });
     } catch (error) {
         console.error('Error saving user profile:', error);
         throw error;
@@ -30,6 +45,22 @@ export const getUserProfile = async (uid) => {
 };
 
 /**
+ * Atomically increment the user's orderCount.
+ * Called after a successful booking to keep the rules engine data accurate.
+ */
+export const incrementOrderCount = async (uid) => {
+    try {
+        const userRef = doc(db, 'users', uid);
+        await updateDoc(userRef, {
+            orderCount: increment(1)
+        });
+    } catch (error) {
+        console.error('Error incrementing order count:', error);
+        // Non-critical — don't throw
+    }
+};
+
+/**
  * Save a booking summary to the user's bookings subcollection.
  */
 export const saveBookingToUser = async (uid, booking) => {
@@ -39,6 +70,8 @@ export const saveBookingToUser = async (uid, booking) => {
             ...booking,
             createdAt: new Date().toISOString()
         });
+        // Also increment the order counter for the rules engine
+        await incrementOrderCount(uid);
     } catch (error) {
         console.error('Error saving booking to user:', error);
         throw error;
@@ -59,3 +92,4 @@ export const getUserBookings = async (uid) => {
         return [];
     }
 };
+

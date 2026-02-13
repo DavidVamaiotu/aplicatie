@@ -1,7 +1,7 @@
 import React from 'react';
-import { Users, Bed, ChevronRight } from 'lucide-react';
+import { Users, Bed, ChevronRight, Tag } from 'lucide-react';
 
-const RoomCard = ({ room, onBook }) => {
+const RoomCard = ({ room, onBook, discount }) => {
     return (
         <div
             className="room-card group tap-highlight"
@@ -19,6 +19,18 @@ const RoomCard = ({ room, onBook }) => {
                     <span className="price">{room.price}</span>
                     <span className="per-night"> / noapte</span>
                 </div>
+                {/* Discount Badge */}
+                {discount && (
+                    <div className="room-card-discount-badge">
+                        <Tag size={12} />
+                        <span>
+                            {discount.discountType === 'percentage'
+                                ? `-${discount.discountValue}%`
+                                : `-${discount.discountValue} RON`
+                            }
+                        </span>
+                    </div>
+                )}
             </div>
 
             {/* Content Container */}
@@ -67,3 +79,4 @@ const RoomCard = ({ room, onBook }) => {
 };
 
 export default RoomCard;
+

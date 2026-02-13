@@ -5,11 +5,15 @@ import RoomCard from '../components/RoomCard';
 import RoomCardSkeleton from '../components/RoomCardSkeleton';
 import ScrollReveal from '../components/ScrollReveal';
 import { getRooms } from '../data/rooms';
+import { useAuth } from '../context/AuthContext';
+import { fetchUserDiscounts, getRoomDiscounts } from '../services/discountService';
 
 const Home = () => {
     const navigate = useNavigate();
+    const { user } = useAuth();
     const [rooms, setRooms] = React.useState([]);
     const [loading, setLoading] = React.useState(true);
+    const [userDiscounts, setUserDiscounts] = React.useState([]);
 
     React.useEffect(() => {
         const fetchRooms = async () => {
@@ -19,6 +23,15 @@ const Home = () => {
         };
         fetchRooms();
     }, []);
+
+    // Fetch discounts when user is logged in
+    React.useEffect(() => {
+        if (!user?.uid) {
+            setUserDiscounts([]);
+            return;
+        }
+        fetchUserDiscounts().then(setUserDiscounts).catch(() => { });
+    }, [user?.uid]);
 
     const handleBook = (room) => {
         navigate(`/book/room/${room.id}`);
@@ -75,11 +88,15 @@ const Home = () => {
                             <RoomCardSkeleton />
                         </>
                     ) : (
-                        rooms.map((room) => (
-                            <ScrollReveal key={room.id}>
-                                <RoomCard room={room} onBook={handleBook} />
-                            </ScrollReveal>
-                        ))
+                        rooms.map((room) => {
+                            const roomDiscs = getRoomDiscounts(userDiscounts, room.id);
+                            const bestDisc = roomDiscs.length > 0 ? roomDiscs[0] : null;
+                            return (
+                                <ScrollReveal key={room.id}>
+                                    <RoomCard room={room} onBook={handleBook} discount={bestDisc} />
+                                </ScrollReveal>
+                            );
+                        })
                     )}
                 </div>
             </div>
