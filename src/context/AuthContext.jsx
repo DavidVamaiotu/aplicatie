@@ -11,6 +11,7 @@ import {
 import { FirebaseAuthentication } from '@capacitor-firebase/authentication';
 import { auth } from '../firebase';
 import { saveUserProfile } from '../services/userService';
+import { removePushToken } from '../services/pushNotificationService';
 
 const AuthContext = createContext(undefined);
 
@@ -159,6 +160,10 @@ export const AuthProvider = ({ children }) => {
     // Sign out
     const logout = async () => {
         try {
+            // Remove FCM token before signing out
+            if (user?.uid) {
+                await removePushToken(user.uid);
+            }
             await signOut(auth);
             setUser(null);
             setCachedUser(null);

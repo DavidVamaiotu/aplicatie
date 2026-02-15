@@ -2980,19 +2980,20 @@ img {
 
 /* Stats Cards */
 .account-stats {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  display: flex;
+  justify-content: center;
   gap: 0.75rem;
   margin-bottom: 1.5rem;
 }
 
 .stat-card {
   background: var(--color-surface);
-  border-radius: 1rem;
-  padding: 1rem 0.75rem;
+  border-radius: 1.25rem;
+  padding: 1.5rem 3rem;
   text-align: center;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
   transition: transform 0.2s ease, box-shadow 0.2s ease;
+  min-width: 160px;
 }
 
 .stat-card:hover {
@@ -3001,16 +3002,16 @@ img {
 }
 
 .stat-value {
-  font-size: 1.5rem;
+  font-size: 2rem;
   font-weight: 700;
   color: var(--color-primary);
   line-height: 1.2;
 }
 
 .stat-label {
-  font-size: 0.75rem;
+  font-size: 0.9rem;
   color: var(--color-text-light);
-  margin-top: 0.25rem;
+  margin-top: 0.375rem;
   font-weight: 500;
 }
 

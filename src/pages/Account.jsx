@@ -228,14 +228,6 @@ const Account = () => {
                         <div className="stat-value">{stats.totalBookings}</div>
                         <div className="stat-label">Rezervări</div>
                     </div>
-                    <div className="stat-card">
-                        <div className="stat-value">{stats.totalNights}</div>
-                        <div className="stat-label">Nopți</div>
-                    </div>
-                    <div className="stat-card">
-                        <div className="stat-value">{stats.totalSpent}</div>
-                        <div className="stat-label">RON Total</div>
-                    </div>
                 </div>
 
                 {/* Discounts Section */}

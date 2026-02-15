@@ -15,11 +15,20 @@ import { App as CapacitorApp } from '@capacitor/app';
 import { StatusBar, Style } from '@capacitor/status-bar';
 import { useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
+import { useAuth } from './context/AuthContext';
+import { initPushNotifications } from './services/pushNotificationService';
 
 function AppContent() {
   const navigate = useNavigate();
   const location = useLocation();
+  const { user } = useAuth();
 
+  // Initialize push notifications when user is authenticated
+  useEffect(() => {
+    if (user?.uid) {
+      initPushNotifications(user.uid);
+    }
+  }, [user?.uid]);
   useEffect(() => {
     // Configure Status Bar - white text on green to match header
     const configureStatusBar = async () => {

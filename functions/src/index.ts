@@ -1,4 +1,6 @@
 import { onCall, HttpsError } from "firebase-functions/v2/https";
+import { onDocumentCreated } from "firebase-functions/v2/firestore";
+import { onSchedule } from "firebase-functions/v2/scheduler";
 import * as admin from "firebase-admin";
 
 admin.initializeApp();
@@ -431,5 +433,329 @@ export const toggleCampaignStatus = onCall(
             campaignId,
             isActive,
         };
+    }
+);
+
+// ─── Push Notification Helpers ──────────────────────────────────────────────
+
+/**
+ * Send a push notification to a list of FCM tokens.
+ * Automatically cleans up invalid/expired tokens from Firestore.
+ */
+async function sendToTokens(
+    userId: string,
+    tokens: string[],
+    title: string,
+    body: string,
+    data?: Record<string, string>
+): Promise<number> {
+    if (!tokens || tokens.length === 0) return 0;
+
+    const message = {
+        tokens,
+        notification: { title, body },
+        data: data || {},
+        android: {
+            priority: "high" as const,
+            notification: {
+                channelId: "marina_park_default",
+                priority: "high" as const,
+                defaultSound: true,
+                defaultVibrateTimings: true,
+            },
+        },
+    };
+
+    const response = await admin.messaging().sendEachForMulticast(message);
+
+    // Clean up invalid tokens
+    const tokensToRemove: string[] = [];
+    response.responses.forEach((resp: admin.messaging.SendResponse, idx: number) => {
+        if (resp.error) {
+            const code = resp.error.code;
+            if (
+                code === "messaging/invalid-registration-token" ||
+                code === "messaging/registration-token-not-registered"
+            ) {
+                tokensToRemove.push(tokens[idx]);
+            }
+        }
+    });
+
+    // Remove invalid tokens from Firestore
+    if (tokensToRemove.length > 0 && userId) {
+        const userRef = db.collection("users").doc(userId);
+        await userRef.update({
+            fcmTokens: admin.firestore.FieldValue.arrayRemove(...tokensToRemove),
+        });
+    }
+
+    return response.successCount;
+}
+
+/**
+ * Send a push notification to ALL users that have FCM tokens.
+ */
+async function broadcastToAll(
+    title: string,
+    body: string,
+    data?: Record<string, string>
+): Promise<number> {
+    const usersSnap = await db
+        .collection("users")
+        .where("fcmTokens", "!=", [])
+        .get();
+
+    let totalSent = 0;
+    for (const userDoc of usersSnap.docs) {
+        const userData = userDoc.data();
+        const tokens = userData.fcmTokens as string[];
+        if (tokens && tokens.length > 0) {
+            totalSent += await sendToTokens(
+                userDoc.id,
+                tokens,
+                title,
+                body,
+                data
+            );
+        }
+    }
+    return totalSent;
+}
+
+// ─── Push Notification Cloud Functions ──────────────────────────────────────
+
+/**
+ * onNewCampaign
+ *
+ * Firestore trigger: fires when a new document is created in `campaigns`.
+ * Sends a push notification to all users with FCM tokens about the new discount.
+ * Notifications are delivered by FCM even when the app is completely killed.
+ */
+export const onNewCampaign = onDocumentCreated(
+    {
+        document: "campaigns/{campaignId}",
+        region: "europe-west1",
+    },
+    async (event) => {
+        const snap = event.data;
+        if (!snap) return;
+
+        const campaign = snap.data();
+
+        // Only notify for active campaigns
+        if (!campaign.isActive) return;
+
+        const title = "🎉 Reducere nouă disponibilă!";
+        const body = campaign.name
+            ? `${campaign.name} — verifică acum în aplicație!`
+            : "Ai o reducere nouă disponibilă. Verifică acum!";
+
+        const sent = await broadcastToAll(title, body, {
+            type: "new_discount",
+            campaignId: event.params.campaignId,
+        });
+
+        console.log(
+            `[onNewCampaign] Sent notification for campaign ${event.params.campaignId} to ${sent} devices`
+        );
+    }
+);
+
+/**
+ * sendDiscountReminders
+ *
+ * Scheduled function that runs every 30 days.
+ * For each user with FCM tokens, evaluates active campaigns and sends
+ * a reminder if the user has eligible discounts.
+ */
+export const sendDiscountReminders = onSchedule(
+    {
+        schedule: "0 10 1 * *",  // 10:00 AM on the 1st of every month
+        region: "europe-west1",
+        timeZone: "Europe/Bucharest",
+    },
+    async () => {
+        const now = admin.firestore.Timestamp.now();
+
+        // 1. Get all active, unexpired campaigns
+        const campaignsSnap = await db
+            .collection("campaigns")
+            .where("isActive", "==", true)
+            .where("validUntil", ">", now)
+            .get();
+
+        if (campaignsSnap.empty) {
+            console.log("[sendDiscountReminders] No active campaigns, skipping.");
+            return;
+        }
+
+        const campaigns = campaignsSnap.docs.map(
+            (doc) => ({ id: doc.id, ...doc.data() }) as Campaign
+        );
+
+        // 2. Get all users with FCM tokens
+        const usersSnap = await db
+            .collection("users")
+            .where("fcmTokens", "!=", [])
+            .get();
+
+        let totalSent = 0;
+
+        for (const userDoc of usersSnap.docs) {
+            const userData = userDoc.data();
+            const tokens = userData.fcmTokens as string[];
+            if (!tokens || tokens.length === 0) continue;
+
+            const userProfile = userData as Record<string, unknown>;
+
+            // Get usage counts for this user
+            const usagesSnap = await db
+                .collection("discount_usages")
+                .where("userId", "==", userDoc.id)
+                .get();
+
+            const userUsageMap: Record<string, number> = {};
+            usagesSnap.forEach((doc) => {
+                const data = doc.data();
+                const cid = data.campaignId as string;
+                userUsageMap[cid] = (userUsageMap[cid] || 0) + 1;
+            });
+
+            // Check if this user is eligible for any campaign
+            let hasEligible = false;
+            for (const campaign of campaigns) {
+                // Check global limit
+                if (
+                    campaign.globalMaxUses > 0 &&
+                    campaign.currentGlobalUses >= campaign.globalMaxUses
+                ) {
+                    continue;
+                }
+
+                // Check per-user limit
+                const userUses = userUsageMap[campaign.id] || 0;
+                if (
+                    campaign.maxUsesPerUser > 0 &&
+                    userUses >= campaign.maxUsesPerUser
+                ) {
+                    continue;
+                }
+
+                // Evaluate rules
+                if (
+                    !campaign.rules ||
+                    campaign.rules.length === 0 ||
+                    evaluateAllRules(userProfile, campaign.rules)
+                ) {
+                    hasEligible = true;
+                    break;
+                }
+            }
+
+            if (hasEligible) {
+                totalSent += await sendToTokens(
+                    userDoc.id,
+                    tokens,
+                    "💰 Nu uita de reducerile tale!",
+                    "Ai reduceri disponibile care te așteaptă. Deschide aplicația!",
+                    { type: "discount_reminder" }
+                );
+            }
+        }
+
+        console.log(
+            `[sendDiscountReminders] Sent reminders to ${totalSent} devices`
+        );
+    }
+);
+
+/**
+ * sendManualNotification
+ *
+ * Admin-only callable function to send any custom push notification.
+ *
+ * Input:
+ *   - title: string (required)
+ *   - body: string (required)
+ *   - targetUid?: string — send to a specific user
+ *   - topic?: string — send to a FCM topic
+ *   If neither targetUid nor topic is provided, broadcasts to ALL users.
+ */
+export const sendManualNotification = onCall(
+    { region: "europe-west1" },
+    async (request) => {
+        // 1. Auth + admin check
+        if (!request.auth) {
+            throw new HttpsError("unauthenticated", "User must be signed in.");
+        }
+        if (request.auth.token.admin !== true) {
+            throw new HttpsError(
+                "permission-denied",
+                "Only admins can send manual notifications."
+            );
+        }
+
+        const { title, body, targetUid, topic } = request.data as {
+            title?: string;
+            body?: string;
+            targetUid?: string;
+            topic?: string;
+        };
+
+        if (!title || !body) {
+            throw new HttpsError(
+                "invalid-argument",
+                "title and body are required."
+            );
+        }
+
+        // 2a. Send to a specific user
+        if (targetUid) {
+            const userDoc = await db.collection("users").doc(targetUid).get();
+            if (!userDoc.exists) {
+                throw new HttpsError("not-found", "User not found.");
+            }
+            const userData = userDoc.data();
+            const tokens = (userData?.fcmTokens || []) as string[];
+            if (tokens.length === 0) {
+                return {
+                    success: true,
+                    sent: 0,
+                    message: "User has no registered devices.",
+                };
+            }
+
+            const sent = await sendToTokens(
+                targetUid,
+                tokens,
+                title,
+                body,
+                { type: "manual" }
+            );
+            return { success: true, sent };
+        }
+
+        // 2b. Send to a FCM topic
+        if (topic) {
+            await admin.messaging().send({
+                topic,
+                notification: { title, body },
+                android: {
+                    priority: "high",
+                    notification: {
+                        channelId: "marina_park_default",
+                        priority: "high",
+                        defaultSound: true,
+                        defaultVibrateTimings: true,
+                    },
+                },
+            });
+            return { success: true, sent: 1, message: `Sent to topic: ${topic}` };
+        }
+
+        // 2c. Broadcast to ALL users
+        const sent = await broadcastToAll(title, body, { type: "manual" });
+        return { success: true, sent };
     }
 );
