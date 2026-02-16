@@ -199,6 +199,8 @@ const BookingPage = () => {
                 resource_id: parseInt(selectedUnit.id), // WordPress resource ID
                 unit_id: selectedUnit.id,
                 unitId: selectedUnit.id,
+                adults: guests.adults,
+                children: guests.children,
                 // Check-in from 15:00, Check-out until 12:00
                 check_in: '15:00',
                 check_out: '12:00',

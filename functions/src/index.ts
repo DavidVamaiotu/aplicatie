@@ -215,6 +215,23 @@ function requirePositiveInt(value: unknown, field: string): number {
     return num;
 }
 
+function parseIntegerWithMin(
+    value: unknown,
+    field: string,
+    defaultValue: number,
+    minValue: number
+): number {
+    if (value === undefined || value === null || value === "") {
+        return defaultValue;
+    }
+
+    const num = Number(value);
+    if (!Number.isInteger(num) || num < minValue) {
+        throw new HttpsError("invalid-argument", `${field} must be an integer >= ${minValue}.`);
+    }
+    return num;
+}
+
 function normalizeDateOnly(dateTime: string): string {
     return dateTime.trim().split(" ")[0];
 }
@@ -859,12 +876,9 @@ export const createBookingAndReserve = onCall(
             ? requireNonEmptyString(payload.unit_id ?? payload.unitId, "unitId", 64)
             : "";
 
-        const adults = bookingType === "camping"
-            ? Math.max(1, requirePositiveInt(payload.adults ?? 1, "adults"))
-            : 0;
-        const children = bookingType === "camping"
-            ? Math.max(0, Math.floor(Number(payload.children ?? 0) || 0))
-            : 0;
+        const adultsDefault = bookingType === "room" ? 2 : 1;
+        const adults = parseIntegerWithMin(payload.adults, "adults", adultsDefault, 1);
+        const children = parseIntegerWithMin(payload.children, "children", 0, 0);
 
         const ownerUid = request.auth?.uid;
         const rawRequest = request.rawRequest as
@@ -964,16 +978,22 @@ export const createBookingAndReserve = onCall(
             resource_id: resourceId,
             check_in: payload.check_in || "15:00",
             check_out: payload.check_out || "12:00",
+            adults,
+            children,
+            date_range: `${startDateStr} - ${endDateStr}`,
             idempotency_key: holdId,
             correlation_id: correlationId,
         };
 
         if (bookingType === "room") {
             wordpressPayload.unit_id = unitId;
-        } else {
-            wordpressPayload.adults = adults;
-            wordpressPayload.children = children;
-            wordpressPayload.license_plate = typeof payload.license_plate === "string" ? payload.license_plate : "";
+        }
+
+        const licensePlate = typeof payload.license_plate === "string"
+            ? payload.license_plate.trim()
+            : "";
+        if (licensePlate) {
+            wordpressPayload.license_plate = licensePlate;
         }
 
         let providerResult: Record<string, unknown>;
