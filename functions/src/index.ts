@@ -1,6 +1,7 @@
 import { onCall, HttpsError } from "firebase-functions/v2/https";
 import { onDocumentCreated } from "firebase-functions/v2/firestore";
 import { onSchedule } from "firebase-functions/v2/scheduler";
+import { defineSecret } from "firebase-functions/params";
 import * as admin from "firebase-admin";
 import { createHash, createHmac, randomUUID } from "crypto";
 
@@ -14,6 +15,8 @@ const RATE_LIMIT_ROOM_MAX_ATTEMPTS = 5;
 const HOLD_TTL_MS = 5 * 60 * 1000;
 const CAPTCHA_VERIFY_URL = "https://www.google.com/recaptcha/api/siteverify";
 const SYNC_RETRY_LIMIT = 10;
+const BOOKING_PROVIDER_HMAC_SECRET = defineSecret("BOOKING_PROVIDER_HMAC_SECRET");
+const BOOKING_RECAPTCHA_SECRET = defineSecret("BOOKING_RECAPTCHA_SECRET");
 
 interface RateLimitSpec {
     key: string;
@@ -78,6 +81,12 @@ interface BookingSummaryResult {
     alreadyExisted: boolean;
     syncStatus: "synced" | "pending_local_sync";
     correlationId: string;
+}
+
+function readSecretValue(secretParam: { value: () => string }, envKey: string): string {
+    const secretValue = String(secretParam.value() || "").trim();
+    if (secretValue) return secretValue;
+    return String(process.env[envKey] || "").trim();
 }
 
 // ─── Rule Evaluation Helpers ────────────────────────────────────────────────
@@ -312,7 +321,7 @@ async function callWordPressCreateBooking(
         "Content-Type": "application/json",
         "X-Marina-Correlation-Id": correlationId,
     };
-    const providerSecret = process.env.BOOKING_PROVIDER_HMAC_SECRET;
+    const providerSecret = readSecretValue(BOOKING_PROVIDER_HMAC_SECRET, "BOOKING_PROVIDER_HMAC_SECRET");
     if (providerSecret) {
         const timestamp = String(Date.now());
         const signature = createHmac("sha256", providerSecret)
@@ -489,7 +498,7 @@ async function verifyGuestCaptcha(
     captchaToken: string | undefined,
     rawRequest: { ip?: string; headers?: Record<string, string | string[] | undefined> } | undefined
 ): Promise<void> {
-    const secret = process.env.BOOKING_RECAPTCHA_SECRET;
+    const secret = readSecretValue(BOOKING_RECAPTCHA_SECRET, "BOOKING_RECAPTCHA_SECRET");
     const isEmulator = process.env.FUNCTIONS_EMULATOR === "true";
     if (!secret && isEmulator) return;
     if (!secret) {
@@ -810,6 +819,7 @@ export const createBookingAndReserve = onCall(
     {
         region: "europe-west1",
         enforceAppCheck: true,
+        secrets: [BOOKING_PROVIDER_HMAC_SECRET, BOOKING_RECAPTCHA_SECRET],
     },
     async (request) => {
         const payload = request.data as Partial<CreateBookingPayload>;
