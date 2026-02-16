@@ -1,35 +1,23 @@
-const API_BASE_URL = 'https://www.marinapark.ro/wp-json/wpbc-custom/v1';
+import { httpsCallable } from 'firebase/functions';
+import { functions } from '../firebase';
 
 /**
- * Creates a new booking via the WordPress API.
+ * Creates and reserves a booking via Cloud Functions.
+ * Booking provider and Firestore writes are handled server-side.
  * @param {Object} bookingData - The booking data.
- * @param {Array} bookingData.dates - Array of date strings (e.g., ['2023-10-25', '2023-10-26']).
- * @param {string} bookingData.name - Customer first name.
- * @param {string} bookingData.last_name - Customer last name.
- * @param {string} bookingData.email - Customer email.
- * @param {string} bookingData.phone - Customer phone.
- * @param {number} bookingData.resource_id - The resource ID (default 1).
+ * @param {Array} bookingData.dates - Array of date strings.
+ * @param {'room'|'camping'} bookingData.bookingType - Booking type.
+ * @param {number} bookingData.roomId - Firestore room document id.
+ * @param {number} bookingData.resource_id - WordPress resource id.
  * @returns {Promise<Object>} The API response.
  */
 export const createBooking = async (bookingData) => {
     try {
-        const response = await fetch(`${API_BASE_URL}/create-booking`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(bookingData),
-        });
-
-        const data = await response.json();
-
-        if (!response.ok) {
-            throw new Error(data.message || 'Failed to create booking');
-        }
-
-        return data;
+        const fn = httpsCallable(functions, 'createBookingAndReserve');
+        const result = await fn(bookingData);
+        return result.data;
     } catch (error) {
         console.error('API Error:', error);
-        throw error;
+        throw new Error(error?.message || 'Failed to create booking');
     }
 };

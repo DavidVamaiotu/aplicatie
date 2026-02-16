@@ -7,61 +7,116 @@
  *
  * Usage:  node scripts/create-campaign.cjs
  *
- * Uses the firebase-tools login credentials (from `firebase login`)
- * so no separate service account permissions are needed.
+ * Auth priority:
+ * 1) Local service account file at ../service-account.json
+ * 2) Application Default Credentials (GOOGLE_APPLICATION_CREDENTIALS / gcloud ADC)
  */
 
 const admin = require('firebase-admin');
 const readline = require('readline');
 const fs = require('fs');
 const path = require('path');
-const { GoogleAuth } = require('google-auth-library');
 
 // ── Firebase Init ──────────────────────────────────────────────────────────
-// Read the refresh token from firebase-tools config to get a valid credential
-const FIREBASE_CONFIG_PATH = path.join(
-    process.env.HOME || process.env.USERPROFILE,
-    '.config', 'configstore', 'firebase-tools.json'
-);
+const PROJECT_ID = 'marina-park-booking-app';
+const SERVICE_ACCOUNT_PATH = path.join(__dirname, '..', 'service-account.json');
 
-function initFirebase() {
-    // Strategy 1: Use GOOGLE_APPLICATION_CREDENTIALS env var
-    if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
-        admin.initializeApp({ projectId: 'marina-park-booking-app' });
-        return admin.firestore();
-    }
-
-    // Strategy 2: Use firebase-tools refresh token
-    let refreshToken = null;
+function tryInit(name, options, appName) {
     try {
-        const config = JSON.parse(fs.readFileSync(FIREBASE_CONFIG_PATH, 'utf8'));
-        refreshToken = config.tokens?.refresh_token;
-    } catch { }
-
-    if (refreshToken) {
-        const credential = admin.credential.refreshToken({
-            type: 'authorized_user',
-            client_id: '563584335869-fgrhgmd47bqnekij5i8b5pr03ho849e6.apps.googleusercontent.com',
-            client_secret: 'j9iVZfS8kkCEFUPaAeJV0sAi',
-            refresh_token: refreshToken,
-        });
-        admin.initializeApp({ credential, projectId: 'marina-park-booking-app' });
-        return admin.firestore();
+        const app = admin.initializeApp(options, appName);
+        return { ok: true, db: app.firestore(), name };
+    } catch (err) {
+        return { ok: false, error: err, name };
     }
-
-    // Strategy 3: Try service account
-    try {
-        const serviceAccount = require('../service-account.json');
-        admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
-        return admin.firestore();
-    } catch { }
-
-    // Strategy 4: Application default credentials
-    admin.initializeApp({ projectId: 'marina-park-booking-app' });
-    return admin.firestore();
 }
 
-const db = initFirebase();
+function initFirebase() {
+    const failures = [];
+    const forcedAuth = (process.env.CAMPAIGN_CLI_AUTH || '').trim().toLowerCase();
+
+    const tryServiceAccount = () => {
+        if (fs.existsSync(SERVICE_ACCOUNT_PATH)) {
+            const serviceAccount = require(SERVICE_ACCOUNT_PATH);
+            const cert = tryInit(
+                'service-account.json',
+                { credential: admin.credential.cert(serviceAccount), projectId: PROJECT_ID },
+                'campaign-cli-sa'
+            );
+            if (cert.ok) {
+                return {
+                    db: cert.db,
+                    source: 'service-account.json',
+                    principal: serviceAccount.client_email || 'unknown-service-account',
+                };
+            }
+            failures.push(`- service-account.json failed: ${cert.error?.message || 'unknown error'}`);
+            return null;
+        }
+        failures.push(`- service-account.json not found at ${SERVICE_ACCOUNT_PATH}`);
+        return null;
+    };
+
+    const tryAdc = () => {
+        const adc = tryInit(
+            'application default credentials',
+            {
+                credential: admin.credential.applicationDefault(),
+                projectId: PROJECT_ID,
+            },
+            'campaign-cli-adc'
+        );
+        if (adc.ok) {
+            return {
+                db: adc.db,
+                source: 'application default credentials',
+                principal: process.env.GOOGLE_APPLICATION_CREDENTIALS || 'adc',
+            };
+        }
+        failures.push(`- ADC failed: ${adc.error?.message || 'unknown error'}`);
+        return null;
+    };
+
+    // Auth selection:
+    // - CAMPAIGN_CLI_AUTH=sa  -> force service account
+    // - CAMPAIGN_CLI_AUTH=adc -> force ADC
+    // - unset                 -> default priority (service account, then ADC)
+    if (forcedAuth === 'sa') {
+        const sa = tryServiceAccount();
+        if (sa) return sa;
+    } else if (forcedAuth === 'adc') {
+        const adc = tryAdc();
+        if (adc) return adc;
+    } else {
+        const sa = tryServiceAccount();
+        if (sa) return sa;
+        const adc = tryAdc();
+        if (adc) return adc;
+    }
+
+    throw new Error(
+        [
+            'Firebase initialization failed for create-campaign.',
+            'Configure one of the following before running this script:',
+            'Optional override: set CAMPAIGN_CLI_AUTH=sa or CAMPAIGN_CLI_AUTH=adc',
+            '1) GOOGLE_APPLICATION_CREDENTIALS pointing to a valid service account JSON, or',
+            `2) Place a valid service account at ${SERVICE_ACCOUNT_PATH}`,
+            '',
+            'Details:',
+            ...failures,
+        ].join('\n')
+    );
+}
+
+let db;
+let credentialInfo = { source: 'unknown', principal: 'unknown' };
+try {
+    const init = initFirebase();
+    db = init.db;
+    credentialInfo = { source: init.source, principal: init.principal };
+} catch (err) {
+    console.error(`\n❌ ${err.message}\n`);
+    process.exit(1);
+}
 
 // ── Room catalog (keep in sync with src/data/rooms.js) ─────────────────────
 const ROOMS = [
@@ -226,6 +281,9 @@ async function selectRooms() {
 // ── Main flow ──────────────────────────────────────────────────────────────
 async function main() {
     header('Marina Park — Campaign Creator');
+    console.log(`${DIM}  Auth source: ${credentialInfo.source}${RESET}`);
+    console.log(`${DIM}  Principal: ${credentialInfo.principal}${RESET}`);
+    console.log();
 
     // ─── Basic info ────────────────────────────────────────────────────
     section('Basic Information');
@@ -327,6 +385,16 @@ async function main() {
         console.log(`${DIM}  View at: https://console.firebase.google.com/project/marina-park-booking-app/firestore/databases/-default-/data/campaigns/${docRef.id}${RESET}\n`);
     } catch (err) {
         console.error(`\n${YELLOW}  ❌ Error: ${err.message}${RESET}\n`);
+        const permissionDenied =
+            err?.code === 7 ||
+            err?.code === 'PERMISSION_DENIED' ||
+            String(err?.message || '').includes('PERMISSION_DENIED');
+        if (permissionDenied) {
+            console.error(`${YELLOW}  This identity does not have Firestore write IAM on project '${PROJECT_ID}'.${RESET}`);
+            console.error(`${YELLOW}  Auth source: ${credentialInfo.source}${RESET}`);
+            console.error(`${YELLOW}  Principal: ${credentialInfo.principal}${RESET}`);
+            console.error(`${YELLOW}  Grant at least roles/datastore.user, then retry.${RESET}\n`);
+        }
     }
 
     rl.close();

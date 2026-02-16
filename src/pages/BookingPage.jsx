@@ -1,8 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { createBooking } from '../services/api';
 import { useAuth } from '../context/AuthContext';
-import { saveBookingToUser } from '../services/userService';
-import { fetchUserDiscounts, getRoomDiscounts, getBestDiscount, applyDiscountToOrder } from '../services/discountService';
+import { fetchUserDiscounts, getRoomDiscounts, getBestDiscount } from '../services/discountService';
 import { useParams, useNavigate } from 'react-router-dom';
 import { format, addDays, isSameDay, differenceInDays } from 'date-fns';
 import { getItemById } from '../data/rooms';
@@ -175,6 +174,8 @@ const BookingPage = () => {
             // Dates array is already prepared above for validation
 
             const bookingData = {
+                bookingType: 'room',
+                roomId: item.id,
                 dates: dates,
                 name: guestDetails.firstName,
                 last_name: guestDetails.lastName,
@@ -182,6 +183,7 @@ const BookingPage = () => {
                 phone: guestDetails.phone,
                 resource_id: parseInt(selectedUnit.id), // WordPress resource ID
                 unit_id: selectedUnit.id,
+                unitId: selectedUnit.id,
                 // Check-in from 15:00, Check-out until 12:00
                 check_in: '15:00',
                 check_out: '12:00'
@@ -190,41 +192,12 @@ const BookingPage = () => {
             const result = await createBooking(bookingData);
             console.log('Booking created:', result);
 
-            // Mark dates as unavailable in Firestore (non-blocking)
-            try {
-                const { markUnitAsUnavailable } = await import('../data/units');
-                await markUnitAsUnavailable(item.id, selectedUnit.id, dates, result.booking_id);
-                console.log('Dates marked as unavailable');
-            } catch (firestoreError) {
-                console.error('Firestore update failed (non-critical):', firestoreError);
-            }
-
-            // Save booking to user's Firestore history (if logged in)
-            if (user?.uid) {
-                try {
-                    const nights = differenceInDays(range.to, range.from);
-                    const pricePerNight = parseInt(item.price.replace(/[^0-9]/g, ''));
-                    await saveBookingToUser(user.uid, {
-                        bookingId: result.booking_id,
-                        itemTitle: item.title,
-                        unitName: selectedUnit.name,
-                        dates: `${format(range.from, 'dd MMM')} - ${format(range.to, 'dd MMM yyyy')}`,
-                        nights,
-                        guests,
-                        totalPrice: nights * pricePerNight,
-                        status: 'confirmed'
-                    });
-                } catch (saveErr) {
-                    console.error('Failed to save booking to user (non-critical):', saveErr);
-                }
-            }
-
             // Navigate to success page with booking data
             navigate('/booking-success', {
                 state: {
-                    bookingId: result.booking_id,
-                    unitName: selectedUnit.name,
-                    guests: guests
+                    bookingId: result.bookingId || result.booking_id,
+                    unitName: result.unitName || selectedUnit.name,
+                    guests: result.guests || guests
                 }
             });
         } catch (error) {

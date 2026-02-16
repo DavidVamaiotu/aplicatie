@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { createBooking } from '../services/api';
 import { useAuth } from '../context/AuthContext';
-import { saveBookingToUser } from '../services/userService';
 import { useParams, useNavigate } from 'react-router-dom';
 import { format, addDays, isSameDay, differenceInDays } from 'date-fns';
 import { getItemById } from '../data/rooms';
@@ -107,6 +106,8 @@ const CampingBookingPage = () => {
 
         try {
             const bookingData = {
+                bookingType: 'camping',
+                roomId: item.id,
                 dates: dates,
                 name: guestDetails.firstName,
                 last_name: guestDetails.lastName,
@@ -123,30 +124,11 @@ const CampingBookingPage = () => {
             const result = await createBooking(bookingData);
             console.log('Camping booking created:', result);
 
-            // Save booking to user's Firestore history (if logged in)
-            if (user?.uid) {
-                try {
-                    const nights = differenceInDays(range.to, range.from);
-                    const pricePerNight = parseInt(item.price.replace(/[^0-9]/g, ''));
-                    await saveBookingToUser(user.uid, {
-                        bookingId: result.booking_id,
-                        itemTitle: item.title,
-                        dates: `${format(range.from, 'dd MMM')} - ${format(range.to, 'dd MMM yyyy')}`,
-                        nights,
-                        guests,
-                        totalPrice: totalGuests * nights * pricePerNight,
-                        status: 'confirmed'
-                    });
-                } catch (saveErr) {
-                    console.error('Failed to save booking to user (non-critical):', saveErr);
-                }
-            }
-
             navigate('/booking-success', {
                 state: {
-                    bookingId: result.booking_id,
-                    unitName: item.title,
-                    guests: guests
+                    bookingId: result.bookingId || result.booking_id,
+                    unitName: result.itemTitle || item.title,
+                    guests: result.guests || guests
                 }
             });
         } catch (error) {

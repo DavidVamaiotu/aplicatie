@@ -1,5 +1,5 @@
 import { db } from '../firebase';
-import { collection, getDocs, doc, getDoc, updateDoc, arrayUnion } from 'firebase/firestore';
+import { collection, getDocs, doc, getDoc } from 'firebase/firestore';
 import { addDays, parseISO, format } from 'date-fns';
 
 export const getUnitsForRoom = async (roomId) => {
@@ -79,25 +79,4 @@ export const getUnavailableDatesForRoom = async (roomId) => {
     const fullyBookedDates = Object.keys(dateCounts).filter(date => dateCounts[date] >= units.length);
 
     return fullyBookedDates;
-};
-
-export const markUnitAsUnavailable = async (roomId, unitId, dates, bookingId) => {
-    try {
-        const unitRef = doc(db, 'rooms', roomId.toString(), 'units', unitId);
-
-        // Strip time portion from dates (they may contain timestamps like "2025-06-24 15:00:01")
-        const startDate = dates[0].split(' ')[0];
-        const endDate = dates[dates.length - 1].split(' ')[0];
-
-        await updateDoc(unitRef, {
-            bookings: arrayUnion({
-                id: bookingId,
-                start: startDate,
-                end: endDate
-            })
-        });
-    } catch (error) {
-        console.error("Error updating unit availability:", error);
-        throw error;
-    }
 };

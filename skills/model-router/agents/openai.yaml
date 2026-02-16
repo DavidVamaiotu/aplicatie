@@ -1,0 +1,4 @@
+interface:
+  display_name: "Model Router"
+  short_description: "Route tasks to the best model and reasoning"
+  default_prompt: "Classify my next step and tell me exactly which model and reasoning effort to switch to, plus a ready-to-paste next prompt."
