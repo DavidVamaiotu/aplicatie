@@ -323,11 +323,11 @@ async function callWordPressCreateBooking(
     };
     const providerSecret = readSecretValue(BOOKING_PROVIDER_HMAC_SECRET, "BOOKING_PROVIDER_HMAC_SECRET");
     if (providerSecret) {
-        const timestamp = String(Date.now());
-        const signature = createHmac("sha256", providerSecret)
+        const timestamp = String(Math.floor(Date.now() / 1000));
+        const signatureHash = createHmac("sha256", providerSecret)
             .update(`${timestamp}.${body}`)
             .digest("hex");
-        headers["X-Marina-Signature"] = signature;
+        headers["X-Marina-Signature"] = `sha256=${signatureHash}`;
         headers["X-Marina-Timestamp"] = timestamp;
     }
 
