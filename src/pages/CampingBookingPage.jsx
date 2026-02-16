@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { createBooking } from '../services/api';
+import { getBookingCaptchaToken } from '../services/captchaService';
 import { useAuth } from '../context/AuthContext';
 import { useParams, useNavigate } from 'react-router-dom';
 import { format, addDays, isSameDay, differenceInDays } from 'date-fns';
@@ -68,6 +69,7 @@ const CampingBookingPage = () => {
 
     const handleSubmit = async (e) => {
         e.preventDefault();
+        if (loading) return;
 
         if (!guestDetails.firstName || !guestDetails.lastName || !guestDetails.email || !guestDetails.phone) {
             alert('Te rugăm să completezi toate detaliile personale!');
@@ -105,9 +107,7 @@ const CampingBookingPage = () => {
         setLoading(true);
 
         try {
-            const guestCaptchaToken = !user && typeof window !== 'undefined'
-                ? (window.localStorage.getItem('booking_captcha_token') || '')
-                : '';
+            const guestCaptchaToken = user ? '' : await getBookingCaptchaToken('create_booking_camping');
 
             const bookingData = {
                 bookingType: 'camping',
@@ -133,7 +133,8 @@ const CampingBookingPage = () => {
                 state: {
                     bookingId: result.bookingId || result.booking_id,
                     unitName: result.itemTitle || item.title,
-                    guests: result.guests || guests
+                    guests: result.guests || guests,
+                    syncStatus: result.syncStatus || 'synced'
                 }
             });
         } catch (error) {

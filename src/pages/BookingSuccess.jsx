@@ -108,6 +108,12 @@ const BookingSuccess = () => {
                             </span>
                         </div>
                     )}
+                    {bookingData.syncStatus === 'pending_local_sync' && (
+                        <div className="success-detail-row">
+                            <span className="success-label">Status sincronizare</span>
+                            <span className="success-value">În curs de sincronizare locală</span>
+                        </div>
+                    )}
                 </div>
             )}
 

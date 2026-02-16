@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { createBooking } from '../services/api';
+import { getBookingCaptchaToken } from '../services/captchaService';
 import { useAuth } from '../context/AuthContext';
 import { fetchUserDiscounts, getRoomDiscounts, getBestDiscount } from '../services/discountService';
 import { useParams, useNavigate } from 'react-router-dom';
@@ -117,6 +118,7 @@ const BookingPage = () => {
 
     const handleSubmit = async (e) => {
         e.preventDefault();
+        if (loading) return;
 
         if (!guestDetails.firstName || !guestDetails.lastName || !guestDetails.email || !guestDetails.phone) {
             alert('Te rugăm să completezi toate detaliile personale!');
@@ -172,9 +174,7 @@ const BookingPage = () => {
         try {
             // Format dates as array of strings YYYY-MM-DD
             // Dates array is already prepared above for validation
-            const guestCaptchaToken = !user && typeof window !== 'undefined'
-                ? (window.localStorage.getItem('booking_captcha_token') || '')
-                : '';
+            const guestCaptchaToken = user ? '' : await getBookingCaptchaToken('create_booking_room');
 
             const bookingData = {
                 bookingType: 'room',
@@ -201,7 +201,8 @@ const BookingPage = () => {
                 state: {
                     bookingId: result.bookingId || result.booking_id,
                     unitName: result.unitName || selectedUnit.name,
-                    guests: result.guests || guests
+                    guests: result.guests || guests,
+                    syncStatus: result.syncStatus || 'synced'
                 }
             });
         } catch (error) {

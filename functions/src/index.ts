@@ -2,7 +2,7 @@ import { onCall, HttpsError } from "firebase-functions/v2/https";
 import { onDocumentCreated } from "firebase-functions/v2/firestore";
 import { onSchedule } from "firebase-functions/v2/scheduler";
 import * as admin from "firebase-admin";
-import { createHash } from "crypto";
+import { createHash, createHmac, randomUUID } from "crypto";
 
 admin.initializeApp();
 const db = admin.firestore();
@@ -13,6 +13,7 @@ const RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000;
 const RATE_LIMIT_ROOM_MAX_ATTEMPTS = 5;
 const HOLD_TTL_MS = 5 * 60 * 1000;
 const CAPTCHA_VERIFY_URL = "https://www.google.com/recaptcha/api/siteverify";
+const SYNC_RETRY_LIMIT = 10;
 
 interface RateLimitSpec {
     key: string;
@@ -75,6 +76,8 @@ interface BookingSummaryResult {
         children: number;
     };
     alreadyExisted: boolean;
+    syncStatus: "synced" | "pending_local_sync";
+    correlationId: string;
 }
 
 // ─── Rule Evaluation Helpers ────────────────────────────────────────────────
@@ -270,18 +273,60 @@ function getNights(startDate: Date, endDate: Date): number {
     return Math.max(0, diff);
 }
 
+function extractProviderBookingId(data: Record<string, unknown>): string {
+    const candidates: unknown[] = [
+        data.booking_id,
+        data.bookingId,
+        data.bookingid,
+        data.id,
+        data.result,
+        (data.data as Record<string, unknown> | undefined)?.booking_id,
+        (data.data as Record<string, unknown> | undefined)?.bookingId,
+        (data.data as Record<string, unknown> | undefined)?.id,
+    ];
+
+    for (const candidate of candidates) {
+        if (typeof candidate === "number" && Number.isFinite(candidate)) {
+            return String(Math.trunc(candidate));
+        }
+        if (typeof candidate === "string" && candidate.trim().length > 0) {
+            return candidate.trim();
+        }
+    }
+    return "";
+}
+
+function normalizeErrorMessage(error: unknown): string {
+    if (error instanceof HttpsError) return error.message;
+    if (error instanceof Error && error.message) return error.message;
+    return "Unknown error";
+}
+
 async function callWordPressCreateBooking(
-    payload: Record<string, unknown>
+    payload: Record<string, unknown>,
+    correlationId: string
 ): Promise<Record<string, unknown>> {
     let response: Response;
+    const body = JSON.stringify(payload);
+    const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+        "X-Marina-Correlation-Id": correlationId,
+    };
+    const providerSecret = process.env.BOOKING_PROVIDER_HMAC_SECRET;
+    if (providerSecret) {
+        const timestamp = String(Date.now());
+        const signature = createHmac("sha256", providerSecret)
+            .update(`${timestamp}.${body}`)
+            .digest("hex");
+        headers["X-Marina-Signature"] = signature;
+        headers["X-Marina-Timestamp"] = timestamp;
+    }
 
     try {
         response = await fetch(WORDPRESS_BOOKING_URL, {
             method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-            },
-            body: JSON.stringify(payload),
+            headers,
+            body,
         });
     } catch {
         throw new HttpsError("unavailable", "Could not reach booking provider.");
@@ -289,12 +334,25 @@ async function callWordPressCreateBooking(
 
     let data: Record<string, unknown> = {};
     try {
-        data = await response.json() as Record<string, unknown>;
+        const raw = await response.json() as unknown;
+        if (raw && typeof raw === "object") {
+            data = raw as Record<string, unknown>;
+        } else {
+            data = { result: raw };
+        }
     } catch {
         throw new HttpsError("internal", "Booking provider returned invalid JSON.");
     }
 
     if (!response.ok) {
+        const providerMessage =
+            typeof data.message === "string" && data.message.trim().length > 0
+                ? data.message
+                : "Booking provider rejected request.";
+        throw new HttpsError("failed-precondition", providerMessage);
+    }
+
+    if (data.success === false) {
         const providerMessage =
             typeof data.message === "string" && data.message.trim().length > 0
                 ? data.message
@@ -432,9 +490,10 @@ async function verifyGuestCaptcha(
     rawRequest: { ip?: string; headers?: Record<string, string | string[] | undefined> } | undefined
 ): Promise<void> {
     const secret = process.env.BOOKING_RECAPTCHA_SECRET;
+    const isEmulator = process.env.FUNCTIONS_EMULATOR === "true";
+    if (!secret && isEmulator) return;
     if (!secret) {
-        console.warn("[createBookingAndReserve] BOOKING_RECAPTCHA_SECRET is not set; captcha validation skipped.");
-        return;
+        throw new HttpsError("failed-precondition", "Captcha is not configured on server.");
     }
 
     const token = String(captchaToken || "").trim();
@@ -571,6 +630,180 @@ async function releaseBookingHold(
     });
 }
 
+function hasBookingWithId(bookings: unknown, bookingId: string): boolean {
+    if (!Array.isArray(bookings)) return false;
+    return bookings.some((entry) => {
+        if (!entry || typeof entry !== "object") return false;
+        return String((entry as { id?: unknown }).id || "") === bookingId;
+    });
+}
+
+async function writePendingSyncOrder(params: {
+    bookingId: string;
+    correlationId: string;
+    ownerUid?: string;
+    bookingType: "room" | "camping";
+    roomId: number;
+    unitId?: string;
+    resourceId: number;
+    roomTitle: string;
+    unitName: string | null;
+    dates: string[];
+    startDateStr: string;
+    endDateStr: string;
+    adults: number;
+    children: number;
+    name: string;
+    lastName: string;
+    email: string;
+    phone: string;
+    pricePerNight: number;
+    nights: number;
+    totalPrice: number;
+    lastSyncError: string;
+}): Promise<void> {
+    const orderRef = db.collection("orders").doc(params.bookingId);
+    await orderRef.set({
+        bookingId: params.bookingId,
+        ownerUid: params.ownerUid || null,
+        bookingType: params.bookingType,
+        roomId: params.roomId,
+        unitId: params.bookingType === "room" ? (params.unitId || null) : null,
+        resourceId: params.resourceId,
+        itemTitle: params.roomTitle,
+        unitName: params.unitName,
+        dates: params.dates,
+        startDate: params.startDateStr,
+        endDate: params.endDateStr,
+        guests: {
+            adults: params.adults,
+            children: params.children,
+        },
+        customer: {
+            name: params.name,
+            lastName: params.lastName,
+            email: params.email,
+            phone: params.phone,
+        },
+        status: "external_confirmed_pending_sync",
+        syncStatus: "pending_local_sync",
+        syncRetryCount: 0,
+        lastSyncError: params.lastSyncError,
+        correlationId: params.correlationId,
+        providerConfirmedAt: admin.firestore.FieldValue.serverTimestamp(),
+        pricePerNight: params.pricePerNight,
+        nights: params.nights,
+        totalPrice: params.totalPrice,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+}
+
+async function reconcilePendingOrder(orderRef: admin.firestore.DocumentReference): Promise<void> {
+    await db.runTransaction(async (transaction) => {
+        const orderSnap = await transaction.get(orderRef);
+        if (!orderSnap.exists) return;
+
+        const order = orderSnap.data() || {};
+        const currentSyncStatus = String(order.syncStatus || "");
+        if (currentSyncStatus && currentSyncStatus !== "pending_local_sync") {
+            return;
+        }
+        const bookingId = String(order.bookingId || orderRef.id);
+        const bookingType = String(order.bookingType || "");
+        const roomId = Number(order.roomId);
+        const unitId = typeof order.unitId === "string" ? order.unitId : null;
+        const startDateStr = String(order.startDate || "");
+        const endDateStr = String(order.endDate || "");
+        const ownerUid = typeof order.ownerUid === "string" && order.ownerUid ? order.ownerUid : null;
+
+        if (!bookingId || !Number.isFinite(roomId) || !startDateStr || !endDateStr) {
+            transaction.set(orderRef, {
+                syncStatus: "failed_manual_review",
+                status: "external_confirmed_invalid_payload",
+                lastSyncError: "Invalid order payload for reconciliation",
+                updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            }, { merge: true });
+            return;
+        }
+
+        if (bookingType === "room" && unitId) {
+            const unitRef = db.collection("rooms").doc(String(roomId)).collection("units").doc(unitId);
+            const unitSnap = await transaction.get(unitRef);
+            if (!unitSnap.exists) {
+                transaction.set(orderRef, {
+                    syncStatus: "failed_manual_review",
+                    status: "external_confirmed_missing_unit",
+                    lastSyncError: "Unit not found during reconciliation",
+                    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+                }, { merge: true });
+                return;
+            }
+
+            const unitData = unitSnap.data() || {};
+            const bookings = unitData.bookings;
+            const alreadySynced = hasBookingWithId(bookings, bookingId);
+            if (!alreadySynced) {
+                const startDate = parseDateOnly(startDateStr);
+                const endDate = parseDateOnly(endDateStr);
+                if (hasBookingOverlap(bookings, startDate, endDate)) {
+                    transaction.set(orderRef, {
+                        syncStatus: "failed_manual_review",
+                        status: "external_confirmed_conflict",
+                        lastSyncError: "Unit booking overlap detected during reconciliation",
+                        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+                    }, { merge: true });
+                    return;
+                }
+                transaction.update(unitRef, {
+                    bookings: admin.firestore.FieldValue.arrayUnion({
+                        id: bookingId,
+                        start: startDateStr,
+                        end: endDateStr,
+                    }),
+                });
+            }
+        }
+
+        if (ownerUid) {
+            const guests = (order.guests || {}) as { adults?: unknown; children?: unknown };
+            const userBookingRef = db.collection("users").doc(ownerUid).collection("bookings").doc(bookingId);
+            const userBookingSnap = await transaction.get(userBookingRef);
+            transaction.set(userBookingRef, {
+                bookingId,
+                itemTitle: String(order.itemTitle || `Room ${roomId}`),
+                unitName: typeof order.unitName === "string" ? order.unitName : null,
+                dates: `${startDateStr} - ${endDateStr}`,
+                nights: Number(order.nights || 0),
+                guests: {
+                    adults: Number(guests.adults || 0),
+                    children: Number(guests.children || 0),
+                },
+                totalPrice: Number(order.totalPrice || 0),
+                status: "confirmed",
+                createdAt: new Date().toISOString(),
+            }, { merge: true });
+
+            if (!userBookingSnap.exists) {
+                const userPrivateRef = db.collection("users_private").doc(ownerUid);
+                transaction.set(userPrivateRef, {
+                    orderCount: admin.firestore.FieldValue.increment(1),
+                    lastOrderDate: admin.firestore.FieldValue.serverTimestamp(),
+                    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+                }, { merge: true });
+            }
+        }
+
+        transaction.set(orderRef, {
+            status: "confirmed",
+            syncStatus: "synced",
+            syncedAt: admin.firestore.FieldValue.serverTimestamp(),
+            lastSyncError: admin.firestore.FieldValue.delete(),
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        }, { merge: true });
+    });
+}
+
 // ─── Cloud Functions ────────────────────────────────────────────────────────
 
 export const createBookingAndReserve = onCall(
@@ -580,6 +813,7 @@ export const createBookingAndReserve = onCall(
     },
     async (request) => {
         const payload = request.data as Partial<CreateBookingPayload>;
+        const correlationId = randomUUID();
 
         const bookingType = payload.bookingType;
         if (bookingType !== "room" && bookingType !== "camping") {
@@ -721,6 +955,7 @@ export const createBookingAndReserve = onCall(
             check_in: payload.check_in || "15:00",
             check_out: payload.check_out || "12:00",
             idempotency_key: holdId,
+            correlation_id: correlationId,
         };
 
         if (bookingType === "room") {
@@ -733,13 +968,13 @@ export const createBookingAndReserve = onCall(
 
         let providerResult: Record<string, unknown>;
         try {
-            providerResult = await callWordPressCreateBooking(wordpressPayload);
+            providerResult = await callWordPressCreateBooking(wordpressPayload, correlationId);
         } catch (error) {
             await releaseBookingHold(holdRef, holdId, roomRef, bookingType === "room" ? unitId : null, "provider_rejected");
             throw error;
         }
 
-        const bookingId = String(providerResult.booking_id ?? providerResult.bookingId ?? "").trim();
+        const bookingId = extractProviderBookingId(providerResult);
 
         if (!bookingId) {
             await releaseBookingHold(holdRef, holdId, roomRef, bookingType === "room" ? unitId : null, "missing_booking_id");
@@ -808,6 +1043,9 @@ export const createBookingAndReserve = onCall(
 
                 if (existingOrderSnap.exists) {
                     const existing = existingOrderSnap.data() || {};
+                    const existingSyncStatus = String(existing.syncStatus || "").toLowerCase() === "pending_local_sync"
+                        ? "pending_local_sync"
+                        : "synced";
                     transaction.set(holdRef, {
                         status: "confirmed",
                         bookingId,
@@ -826,6 +1064,8 @@ export const createBookingAndReserve = onCall(
                             children: Number((existing.guests as { children?: unknown } | undefined)?.children || children),
                         },
                         alreadyExisted: true,
+                        syncStatus: existingSyncStatus,
+                        correlationId,
                     };
                 }
 
@@ -852,9 +1092,14 @@ export const createBookingAndReserve = onCall(
                         phone,
                     },
                     status: "confirmed",
+                    syncStatus: "synced",
                     pricePerNight,
                     nights,
                     totalPrice,
+                    correlationId,
+                    providerStatus: "created",
+                    providerRaw: providerResult,
+                    providerConfirmedAt: admin.firestore.FieldValue.serverTimestamp(),
                     createdAt: admin.firestore.FieldValue.serverTimestamp(),
                     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
                 });
@@ -916,11 +1161,52 @@ export const createBookingAndReserve = onCall(
                         children,
                     },
                     alreadyExisted: false,
+                    syncStatus: "synced",
+                    correlationId,
                 };
             });
         } catch (error) {
+            const localSyncError = normalizeErrorMessage(error);
             await releaseBookingHold(holdRef, holdId, roomRef, bookingType === "room" ? unitId : null, "finalization_failed");
-            throw error;
+            await writePendingSyncOrder({
+                bookingId,
+                correlationId,
+                ownerUid,
+                bookingType,
+                roomId,
+                unitId: bookingType === "room" ? unitId : undefined,
+                resourceId,
+                roomTitle,
+                unitName: initialUnitName,
+                dates,
+                startDateStr,
+                endDateStr,
+                adults,
+                children,
+                name,
+                lastName,
+                email,
+                phone,
+                pricePerNight,
+                nights,
+                totalPrice,
+                lastSyncError: localSyncError,
+            });
+
+            return {
+                booking_id: bookingId,
+                bookingId,
+                unitName: initialUnitName,
+                itemTitle: roomTitle,
+                totalPrice,
+                nights,
+                guests: { adults, children },
+                alreadyExisted: false,
+                syncStatus: "pending_local_sync",
+                correlationId,
+                status: "confirmed",
+                warning: "Booking confirmed with provider. Local sync is pending.",
+            };
         }
 
         return {
@@ -932,6 +1218,9 @@ export const createBookingAndReserve = onCall(
             nights: transactionResult.nights,
             guests: transactionResult.guests,
             alreadyExisted: transactionResult.alreadyExisted,
+            syncStatus: transactionResult.syncStatus,
+            correlationId: transactionResult.correlationId,
+            status: "confirmed",
         };
     }
 );
@@ -1070,8 +1359,9 @@ export const applyDiscount = onCall(
             }
 
             const status = String(order.status || "").toLowerCase();
-            if (status === "canceled" || status === "cancelled" || status === "invalid") {
-                throw new HttpsError("failed-precondition", "Discount cannot be applied to this order.");
+            const syncStatus = String(order.syncStatus || "").toLowerCase();
+            if (status !== "confirmed" || (syncStatus && syncStatus !== "synced")) {
+                throw new HttpsError("failed-precondition", "Discount can be applied only to fully confirmed synced orders.");
             }
 
             if (Array.isArray(campaign.roomTags) && campaign.roomTags.length > 0) {
@@ -1344,6 +1634,47 @@ export const cleanupExpiredBookingHolds = onSchedule(
         }
 
         console.log(`[cleanupExpiredBookingHolds] Cleaned ${cleaned} expired booking holds`);
+    }
+);
+
+export const reconcilePendingExternalBookings = onSchedule(
+    {
+        schedule: "*/5 * * * *",
+        region: "europe-west1",
+        timeZone: "Europe/Bucharest",
+    },
+    async () => {
+        const pendingSnap = await db
+            .collection("orders")
+            .where("syncStatus", "==", "pending_local_sync")
+            .limit(100)
+            .get();
+
+        if (pendingSnap.empty) return;
+
+        let reconciled = 0;
+        let failed = 0;
+
+        for (const orderDoc of pendingSnap.docs) {
+            try {
+                await reconcilePendingOrder(orderDoc.ref);
+                reconciled += 1;
+            } catch (error) {
+                failed += 1;
+                const errMessage = normalizeErrorMessage(error);
+                const current = orderDoc.data() || {};
+                const retries = Number(current.syncRetryCount || 0) + 1;
+                await orderDoc.ref.set({
+                    syncRetryCount: retries,
+                    syncStatus: retries >= SYNC_RETRY_LIMIT ? "failed_manual_review" : "pending_local_sync",
+                    status: retries >= SYNC_RETRY_LIMIT ? "external_confirmed_sync_failed" : "external_confirmed_pending_sync",
+                    lastSyncError: errMessage,
+                    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+                }, { merge: true });
+            }
+        }
+
+        console.log(`[reconcilePendingExternalBookings] Reconciled ${reconciled}, failed ${failed}`);
     }
 );
 

@@ -3,6 +3,7 @@ import { getFirestore, enableMultiTabIndexedDbPersistence } from "firebase/fires
 import { getAuth } from "firebase/auth";
 import { getFunctions } from "firebase/functions";
 import { initializeAppCheck, ReCaptchaV3Provider } from "firebase/app-check";
+import { Capacitor } from "@capacitor/core";
 
 const firebaseConfig = {
     apiKey: "AIzaSyCw1KLPe9Jk7ZIfVH0aYgbKBKIxzaiFW9Q",
@@ -19,6 +20,13 @@ export const auth = getAuth(app);
 export const functions = getFunctions(app, "europe-west1");
 
 const appCheckSiteKey = import.meta.env.VITE_FIREBASE_APPCHECK_SITE_KEY;
+const appCheckDebugToken = import.meta.env.VITE_FIREBASE_APPCHECK_DEBUG_TOKEN;
+const isNativePlatform = Capacitor.isNativePlatform();
+
+if (typeof window !== "undefined" && isNativePlatform && appCheckDebugToken) {
+    window.FIREBASE_APPCHECK_DEBUG_TOKEN = appCheckDebugToken === "true" ? true : appCheckDebugToken;
+}
+
 if (typeof window !== "undefined" && appCheckSiteKey) {
     initializeAppCheck(app, {
         provider: new ReCaptchaV3Provider(appCheckSiteKey),
