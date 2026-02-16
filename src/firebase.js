@@ -19,7 +19,9 @@ export const db = getFirestore(app);
 export const auth = getAuth(app);
 export const functions = getFunctions(app, "europe-west1");
 
-const appCheckSiteKey = import.meta.env.VITE_FIREBASE_APPCHECK_SITE_KEY;
+const fallbackRecaptchaSiteKey = import.meta.env.VITE_BOOKING_RECAPTCHA_SITE_KEY
+    || "6Lc04W0sAAAAAE9Y1lk3jLhgvaZImxbrm9M7pW0A";
+const appCheckSiteKey = import.meta.env.VITE_FIREBASE_APPCHECK_SITE_KEY || fallbackRecaptchaSiteKey;
 const appCheckDebugToken = import.meta.env.VITE_FIREBASE_APPCHECK_DEBUG_TOKEN;
 const isNativePlatform = Capacitor.isNativePlatform();
 

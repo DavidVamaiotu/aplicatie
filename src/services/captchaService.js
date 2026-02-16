@@ -1,6 +1,8 @@
 const RECAPTCHA_SCRIPT_ID = 'google-recaptcha-v3';
 const RECAPTCHA_SCRIPT_BASE = 'https://www.google.com/recaptcha/api.js?render=';
-const BOOKING_RECAPTCHA_SITE_KEY = import.meta.env.VITE_BOOKING_RECAPTCHA_SITE_KEY;
+const FALLBACK_BOOKING_RECAPTCHA_SITE_KEY = '6Lc04W0sAAAAAE9Y1lk3jLhgvaZImxbrm9M7pW0A';
+const BOOKING_RECAPTCHA_SITE_KEY =
+    import.meta.env.VITE_BOOKING_RECAPTCHA_SITE_KEY || FALLBACK_BOOKING_RECAPTCHA_SITE_KEY;
 
 let loadPromise = null;
 
