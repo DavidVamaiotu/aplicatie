@@ -19,9 +19,7 @@ export const db = getFirestore(app);
 export const auth = getAuth(app);
 export const functions = getFunctions(app, "europe-west1");
 
-const fallbackRecaptchaSiteKey = import.meta.env.VITE_BOOKING_RECAPTCHA_SITE_KEY
-    || "6Lc04W0sAAAAAE9Y1lk3jLhgvaZImxbrm9M7pW0A";
-const appCheckSiteKey = import.meta.env.VITE_FIREBASE_APPCHECK_SITE_KEY || fallbackRecaptchaSiteKey;
+const appCheckSiteKey = import.meta.env.VITE_FIREBASE_APPCHECK_SITE_KEY;
 const appCheckDebugToken = import.meta.env.VITE_FIREBASE_APPCHECK_DEBUG_TOKEN;
 const isNativePlatform = Capacitor.isNativePlatform();
 
@@ -30,12 +28,16 @@ if (typeof window !== "undefined" && isNativePlatform && appCheckDebugToken) {
 }
 
 if (typeof window !== "undefined" && appCheckSiteKey) {
-    initializeAppCheck(app, {
-        provider: new ReCaptchaV3Provider(appCheckSiteKey),
-        isTokenAutoRefreshEnabled: true,
-    });
+    try {
+        initializeAppCheck(app, {
+            provider: new ReCaptchaV3Provider(appCheckSiteKey),
+            isTokenAutoRefreshEnabled: true,
+        });
+    } catch (error) {
+        console.error("Firebase App Check init failed. Verify VITE_FIREBASE_APPCHECK_SITE_KEY.", error);
+    }
 } else if (!appCheckSiteKey) {
-    console.warn("VITE_FIREBASE_APPCHECK_SITE_KEY is missing. Callable functions with App Check enforcement will fail.");
+    console.error("VITE_FIREBASE_APPCHECK_SITE_KEY is missing. Callable functions with App Check enforcement will fail.");
 }
 
 // Enable offline persistence for Firestore

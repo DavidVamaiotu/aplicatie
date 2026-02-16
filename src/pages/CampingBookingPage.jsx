@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { createBooking } from '../services/api';
 import { getBookingCaptchaToken } from '../services/captchaService';
 import { useAuth } from '../context/AuthContext';
+import { auth } from '../firebase';
 import { useParams, useNavigate } from 'react-router-dom';
 import { format, addDays, isSameDay, differenceInDays } from 'date-fns';
 import { getItemById } from '../data/rooms';
@@ -18,7 +19,7 @@ const capitalizeFirstLetter = (string) => {
 const CampingBookingPage = () => {
     const { id } = useParams();
     const navigate = useNavigate();
-    const { user } = useAuth();
+    const { user, loading: authLoading } = useAuth();
     const today = new Date();
     const [range, setRange] = useState(undefined);
     const [guests, setGuests] = useState({ adults: 2, children: 0 });
@@ -70,6 +71,17 @@ const CampingBookingPage = () => {
     const handleSubmit = async (e) => {
         e.preventDefault();
         if (loading) return;
+        if (authLoading) {
+            alert('Se verifică sesiunea. Încearcă din nou în câteva secunde.');
+            return;
+        }
+
+        const isAuthenticated = Boolean(auth.currentUser?.uid);
+        if (user && !isAuthenticated) {
+            alert('Sesiunea ta a expirat. Te rugăm să te reconectezi.');
+            navigate('/login');
+            return;
+        }
 
         if (!guestDetails.firstName || !guestDetails.lastName || !guestDetails.email || !guestDetails.phone) {
             alert('Te rugăm să completezi toate detaliile personale!');
@@ -107,7 +119,7 @@ const CampingBookingPage = () => {
         setLoading(true);
 
         try {
-            const guestCaptchaToken = user ? '' : await getBookingCaptchaToken('create_booking_camping');
+            const guestCaptchaToken = isAuthenticated ? '' : await getBookingCaptchaToken('create_booking_camping');
 
             const bookingData = {
                 bookingType: 'camping',
@@ -487,6 +499,9 @@ const CampingBookingPage = () => {
                         )}
                     </button>
                 </div>
+                <p className="mt-2 text-xs text-gray-500">
+                    Protejat de reCAPTCHA (verificare invizibilă).
+                </p>
             </div>
 
             {/* Success Modal */}

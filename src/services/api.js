@@ -1,5 +1,35 @@
 import { httpsCallable } from 'firebase/functions';
-import { functions } from '../firebase';
+import { auth, functions } from '../firebase';
+
+function mapBookingError(error) {
+    const code = String(error?.code || '');
+    const rawMessage = String(error?.message || '');
+    const message = rawMessage.toLowerCase();
+
+    if (message.includes('invalid site key')) {
+        return 'Cheia reCAPTCHA este invalidă. Verifică setările de captcha și domeniul aplicației.';
+    }
+
+    if (code === 'functions/unauthenticated') {
+        return 'Sesiunea este invalidă sau verificarea de securitate a eșuat. Reconectează-te și încearcă din nou.';
+    }
+
+    if (code === 'functions/failed-precondition') {
+        if (message.includes('app check')) {
+            return 'App Check nu este configurat corect pentru această aplicație.';
+        }
+        return rawMessage || 'Cererea nu poate fi procesată în acest moment.';
+    }
+
+    if (code === 'functions/invalid-argument') {
+        if (message.includes('captcha')) {
+            return 'Verificarea captcha a eșuat. Reîncearcă.';
+        }
+        return rawMessage || 'Datele rezervării sunt invalide.';
+    }
+
+    return rawMessage || 'Failed to create booking';
+}
 
 /**
  * Creates and reserves a booking via Cloud Functions.
@@ -13,11 +43,14 @@ import { functions } from '../firebase';
  */
 export const createBooking = async (bookingData) => {
     try {
+        if (auth.currentUser) {
+            await auth.currentUser.getIdToken();
+        }
         const fn = httpsCallable(functions, 'createBookingAndReserve');
         const result = await fn(bookingData);
         return result.data;
     } catch (error) {
         console.error('API Error:', error);
-        throw new Error(error?.message || 'Failed to create booking');
+        throw new Error(mapBookingError(error));
     }
 };

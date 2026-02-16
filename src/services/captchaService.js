@@ -1,8 +1,6 @@
 const RECAPTCHA_SCRIPT_ID = 'google-recaptcha-v3';
 const RECAPTCHA_SCRIPT_BASE = 'https://www.google.com/recaptcha/api.js?render=';
-const FALLBACK_BOOKING_RECAPTCHA_SITE_KEY = '6Lc04W0sAAAAAE9Y1lk3jLhgvaZImxbrm9M7pW0A';
-const BOOKING_RECAPTCHA_SITE_KEY =
-    import.meta.env.VITE_BOOKING_RECAPTCHA_SITE_KEY || FALLBACK_BOOKING_RECAPTCHA_SITE_KEY;
+const BOOKING_RECAPTCHA_SITE_KEY = import.meta.env.VITE_BOOKING_RECAPTCHA_SITE_KEY;
 
 let loadPromise = null;
 
@@ -41,14 +39,22 @@ function loadRecaptchaScript() {
 
 export async function getBookingCaptchaToken(action = 'create_booking') {
     if (!BOOKING_RECAPTCHA_SITE_KEY) {
-        return '';
+        throw new Error('Captcha is not configured: VITE_BOOKING_RECAPTCHA_SITE_KEY is missing.');
     }
 
     await loadRecaptchaScript();
     if (!window.grecaptcha?.ready || !window.grecaptcha?.execute) {
-        throw new Error('reCAPTCHA is not available');
+        throw new Error('reCAPTCHA is not available on this page.');
     }
 
     await new Promise((resolve) => window.grecaptcha.ready(resolve));
-    return window.grecaptcha.execute(BOOKING_RECAPTCHA_SITE_KEY, { action });
+    try {
+        return await window.grecaptcha.execute(BOOKING_RECAPTCHA_SITE_KEY, { action });
+    } catch (error) {
+        const message = String(error?.message || error || '').toLowerCase();
+        if (message.includes('invalid site key')) {
+            throw new Error('Invalid reCAPTCHA site key. Verify VITE_BOOKING_RECAPTCHA_SITE_KEY and allowed domains.');
+        }
+        throw new Error('Failed to generate captcha token.');
+    }
 }

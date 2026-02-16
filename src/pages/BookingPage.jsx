@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { createBooking } from '../services/api';
 import { getBookingCaptchaToken } from '../services/captchaService';
 import { useAuth } from '../context/AuthContext';
+import { auth } from '../firebase';
 import { fetchUserDiscounts, getRoomDiscounts, getBestDiscount } from '../services/discountService';
 import { useParams, useNavigate } from 'react-router-dom';
 import { format, addDays, isSameDay, differenceInDays } from 'date-fns';
@@ -19,7 +20,7 @@ const capitalizeFirstLetter = (string) => {
 const BookingPage = () => {
     const { id } = useParams();
     const navigate = useNavigate();
-    const { user } = useAuth();
+    const { user, loading: authLoading } = useAuth();
     const today = new Date();
     const [range, setRange] = useState(undefined);
     const [guests, setGuests] = useState({ adults: 2, children: 0 });
@@ -119,6 +120,17 @@ const BookingPage = () => {
     const handleSubmit = async (e) => {
         e.preventDefault();
         if (loading) return;
+        if (authLoading) {
+            alert('Se verifică sesiunea. Încearcă din nou în câteva secunde.');
+            return;
+        }
+
+        const isAuthenticated = Boolean(auth.currentUser?.uid);
+        if (user && !isAuthenticated) {
+            alert('Sesiunea ta a expirat. Te rugăm să te reconectezi.');
+            navigate('/login');
+            return;
+        }
 
         if (!guestDetails.firstName || !guestDetails.lastName || !guestDetails.email || !guestDetails.phone) {
             alert('Te rugăm să completezi toate detaliile personale!');
@@ -174,7 +186,7 @@ const BookingPage = () => {
         try {
             // Format dates as array of strings YYYY-MM-DD
             // Dates array is already prepared above for validation
-            const guestCaptchaToken = user ? '' : await getBookingCaptchaToken('create_booking_room');
+            const guestCaptchaToken = isAuthenticated ? '' : await getBookingCaptchaToken('create_booking_room');
 
             const bookingData = {
                 bookingType: 'room',
@@ -609,6 +621,9 @@ const BookingPage = () => {
                         )}
                     </button>
                 </div>
+                <p className="mt-2 text-xs text-gray-500">
+                    Protejat de reCAPTCHA (verificare invizibilă).
+                </p>
             </div>
 
             {/* Success Modal */}
