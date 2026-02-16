@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import { createBooking } from '../services/api';
-import { getBookingCaptchaToken } from '../services/captchaService';
 import { useAuth } from '../context/AuthContext';
 import { useParams, useNavigate } from 'react-router-dom';
 import { format, addDays, isSameDay, differenceInDays } from 'date-fns';
@@ -106,10 +105,9 @@ const CampingBookingPage = () => {
         setLoading(true);
 
         try {
-            let guestCaptchaToken = '';
-            if (!user) {
-                guestCaptchaToken = await getBookingCaptchaToken('create_booking_camping');
-            }
+            const guestCaptchaToken = !user && typeof window !== 'undefined'
+                ? (window.localStorage.getItem('booking_captcha_token') || '')
+                : '';
 
             const bookingData = {
                 bookingType: 'camping',

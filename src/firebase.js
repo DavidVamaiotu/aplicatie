@@ -3,7 +3,6 @@ import { getFirestore, enableMultiTabIndexedDbPersistence } from "firebase/fires
 import { getAuth } from "firebase/auth";
 import { getFunctions } from "firebase/functions";
 import { initializeAppCheck, ReCaptchaV3Provider } from "firebase/app-check";
-import { Capacitor } from "@capacitor/core";
 
 const firebaseConfig = {
     apiKey: "AIzaSyCw1KLPe9Jk7ZIfVH0aYgbKBKIxzaiFW9Q",
@@ -19,16 +18,7 @@ export const db = getFirestore(app);
 export const auth = getAuth(app);
 export const functions = getFunctions(app, "europe-west1");
 
-const isNativePlatform = Capacitor.isNativePlatform();
 const appCheckSiteKey = import.meta.env.VITE_FIREBASE_APPCHECK_SITE_KEY;
-const appCheckDebugToken = import.meta.env.VITE_FIREBASE_APPCHECK_DEBUG_TOKEN;
-
-if (typeof window !== "undefined" && isNativePlatform && appCheckDebugToken) {
-    // Native WebView fallback for environments where web attestation is unavailable.
-    // Prefer Play Integrity-backed native App Check integration for production.
-    window.FIREBASE_APPCHECK_DEBUG_TOKEN = appCheckDebugToken === 'true' ? true : appCheckDebugToken;
-}
-
 if (typeof window !== "undefined" && appCheckSiteKey) {
     initializeAppCheck(app, {
         provider: new ReCaptchaV3Provider(appCheckSiteKey),

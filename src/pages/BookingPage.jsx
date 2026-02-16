@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import { createBooking } from '../services/api';
-import { getBookingCaptchaToken } from '../services/captchaService';
 import { useAuth } from '../context/AuthContext';
 import { fetchUserDiscounts, getRoomDiscounts, getBestDiscount } from '../services/discountService';
 import { useParams, useNavigate } from 'react-router-dom';
@@ -173,10 +172,9 @@ const BookingPage = () => {
         try {
             // Format dates as array of strings YYYY-MM-DD
             // Dates array is already prepared above for validation
-            let guestCaptchaToken = '';
-            if (!user) {
-                guestCaptchaToken = await getBookingCaptchaToken('create_booking_room');
-            }
+            const guestCaptchaToken = !user && typeof window !== 'undefined'
+                ? (window.localStorage.getItem('booking_captcha_token') || '')
+                : '';
 
             const bookingData = {
                 bookingType: 'room',
