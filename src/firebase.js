@@ -18,6 +18,7 @@ const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app);
 export const auth = getAuth(app);
 export const functions = getFunctions(app, "europe-west1");
+export let appCheck = null;
 
 const appCheckSiteKey = import.meta.env.VITE_FIREBASE_APPCHECK_SITE_KEY;
 const appCheckDebugToken = import.meta.env.VITE_FIREBASE_APPCHECK_DEBUG_TOKEN;
@@ -29,7 +30,7 @@ if (typeof window !== "undefined" && isNativePlatform && appCheckDebugToken) {
 
 if (typeof window !== "undefined" && appCheckSiteKey) {
     try {
-        initializeAppCheck(app, {
+        appCheck = initializeAppCheck(app, {
             provider: new ReCaptchaV3Provider(appCheckSiteKey),
             isTokenAutoRefreshEnabled: true,
         });

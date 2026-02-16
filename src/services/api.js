@@ -1,16 +1,17 @@
 import { httpsCallable } from 'firebase/functions';
-import { auth, functions } from '../firebase';
+import { getToken } from 'firebase/app-check';
+import { appCheck, auth, functions } from '../firebase';
 
 function mapBookingError(error) {
     const code = String(error?.code || '');
     const rawMessage = String(error?.message || '');
     const message = rawMessage.toLowerCase();
 
-    if (message.includes('invalid site key')) {
+    if (message.includes('invalid site key') || message.includes('invalid domain for site key')) {
         return 'Cheia reCAPTCHA este invalidă. Verifică setările de captcha și domeniul aplicației.';
     }
 
-    if (code === 'functions/unauthenticated') {
+    if (code === 'functions/unauthenticated' || message.includes('unauthenticated')) {
         return 'Sesiunea este invalidă sau verificarea de securitate a eșuat. Reconectează-te și încearcă din nou.';
     }
 
@@ -45,6 +46,12 @@ export const createBooking = async (bookingData) => {
     try {
         if (auth.currentUser) {
             await auth.currentUser.getIdToken();
+        }
+        if (appCheck) {
+            const appCheckResult = await getToken(appCheck, false);
+            if (!appCheckResult?.token) {
+                throw new Error('App Check token missing');
+            }
         }
         const fn = httpsCallable(functions, 'createBookingAndReserve');
         const result = await fn(bookingData);
