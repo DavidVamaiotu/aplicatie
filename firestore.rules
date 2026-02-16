@@ -58,6 +58,10 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    match /booking_holds/{holdId} {
+      allow read, write: if false;
+    }
+
     // Campaigns: client can read active/unexpired; admins write.
     match /campaigns/{campaignId} {
       allow read: if resource.data.isActive == true

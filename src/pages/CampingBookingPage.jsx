@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { createBooking } from '../services/api';
+import { getBookingCaptchaToken } from '../services/captchaService';
 import { useAuth } from '../context/AuthContext';
 import { useParams, useNavigate } from 'react-router-dom';
 import { format, addDays, isSameDay, differenceInDays } from 'date-fns';
@@ -105,6 +106,11 @@ const CampingBookingPage = () => {
         setLoading(true);
 
         try {
+            let guestCaptchaToken = '';
+            if (!user) {
+                guestCaptchaToken = await getBookingCaptchaToken('create_booking_camping');
+            }
+
             const bookingData = {
                 bookingType: 'camping',
                 roomId: item.id,
@@ -118,7 +124,8 @@ const CampingBookingPage = () => {
                 children: guests.children,
                 license_plate: guestDetails.licensePlate || '',
                 check_in: '15:00',
-                check_out: '12:00'
+                check_out: '12:00',
+                captcha_token: guestCaptchaToken
             };
 
             const result = await createBooking(bookingData);

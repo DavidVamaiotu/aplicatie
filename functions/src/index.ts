@@ -10,6 +10,15 @@ const db = admin.firestore();
 const WORDPRESS_BOOKING_URL = "https://www.marinapark.ro/wp-json/wpbc-custom/v1/create-booking";
 const RATE_LIMIT_MAX_ATTEMPTS = 10;
 const RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000;
+const RATE_LIMIT_ROOM_MAX_ATTEMPTS = 5;
+const HOLD_TTL_MS = 5 * 60 * 1000;
+const CAPTCHA_VERIFY_URL = "https://www.google.com/recaptcha/api/siteverify";
+
+interface RateLimitSpec {
+    key: string;
+    maxAttempts: number;
+    windowMs: number;
+}
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -51,6 +60,8 @@ interface CreateBookingPayload {
     adults?: number;
     children?: number;
     license_plate?: string;
+    captchaToken?: string;
+    captcha_token?: string;
 }
 
 interface BookingSummaryResult {
@@ -294,73 +305,173 @@ async function callWordPressCreateBooking(
     return data;
 }
 
-function getRateLimitKey(
-    uid: string | undefined,
-    rawRequest: { ip?: string; headers?: Record<string, string | string[] | undefined> } | undefined,
-    email: string
-): string {
-    if (uid) {
-        return `uid_${uid}`;
-    }
+function hashValue(value: string): string {
+    return createHash("sha256").update(value).digest("hex");
+}
 
+function getClientIp(
+    rawRequest: { ip?: string; headers?: Record<string, string | string[] | undefined> } | undefined
+): string {
     const headers = rawRequest?.headers || {};
     const forwarded = headers["x-forwarded-for"];
     const forwardedValue = Array.isArray(forwarded) ? forwarded[0] : forwarded;
-    const ip = String(rawRequest?.ip || forwardedValue || "unknown-ip");
-    const userAgentHeader = headers["user-agent"];
-    const userAgent = Array.isArray(userAgentHeader) ? userAgentHeader[0] : String(userAgentHeader || "unknown-ua");
-
-    const hash = createHash("sha256")
-        .update(`${ip}|${userAgent}|${email.toLowerCase()}`)
-        .digest("hex");
-
-    return `guest_${hash}`;
+    const firstForwardedIp = String(forwardedValue || "").split(",")[0].trim();
+    return String(rawRequest?.ip || firstForwardedIp || "unknown-ip");
 }
 
-async function enforceBookingRateLimit(rateLimitKey: string): Promise<void> {
-    const ref = db.collection("booking_rate_limits").doc(rateLimitKey);
+function getUserAgent(
+    rawRequest: { headers?: Record<string, string | string[] | undefined> } | undefined
+): string {
+    const userAgentHeader = rawRequest?.headers?.["user-agent"];
+    return Array.isArray(userAgentHeader)
+        ? String(userAgentHeader[0] || "unknown-ua")
+        : String(userAgentHeader || "unknown-ua");
+}
+
+function getBookingRateLimitSpecs(
+    uid: string | undefined,
+    rawRequest: { ip?: string; headers?: Record<string, string | string[] | undefined> } | undefined,
+    email: string,
+    roomId: number,
+    startDate: string
+): RateLimitSpec[] {
+    if (uid) {
+        return [
+            { key: `uid_${uid}`, maxAttempts: RATE_LIMIT_MAX_ATTEMPTS, windowMs: RATE_LIMIT_WINDOW_MS },
+            { key: `uid_room_${uid}_${roomId}_${startDate}`, maxAttempts: RATE_LIMIT_ROOM_MAX_ATTEMPTS, windowMs: RATE_LIMIT_WINDOW_MS },
+        ];
+    }
+
+    const ip = getClientIp(rawRequest);
+    const userAgent = getUserAgent(rawRequest);
+    const emailNormalized = email.toLowerCase();
+
+    return [
+        { key: `guest_ip_${hashValue(ip)}`, maxAttempts: RATE_LIMIT_MAX_ATTEMPTS, windowMs: RATE_LIMIT_WINDOW_MS },
+        { key: `guest_email_${hashValue(emailNormalized)}`, maxAttempts: RATE_LIMIT_MAX_ATTEMPTS, windowMs: RATE_LIMIT_WINDOW_MS },
+        { key: `guest_fingerprint_${hashValue(`${ip}|${userAgent}|${emailNormalized}`)}`, maxAttempts: RATE_LIMIT_MAX_ATTEMPTS, windowMs: RATE_LIMIT_WINDOW_MS },
+        { key: `guest_room_${roomId}_${startDate}_${hashValue(ip)}`, maxAttempts: RATE_LIMIT_ROOM_MAX_ATTEMPTS, windowMs: RATE_LIMIT_WINDOW_MS },
+    ];
+}
+
+async function enforceBookingRateLimit(specs: RateLimitSpec[]): Promise<void> {
+    const uniqueSpecs = Array.from(
+        new Map(specs.map((spec) => [spec.key, spec])).values()
+    );
+    const refs = uniqueSpecs.map((spec) => db.collection("booking_rate_limits").doc(spec.key));
 
     await db.runTransaction(async (transaction) => {
-        const snap = await transaction.get(ref);
+        const snaps = await Promise.all(refs.map((ref) => transaction.get(ref)));
         const nowMs = Date.now();
 
-        let windowStartMs = nowMs;
-        let count = 0;
+        snaps.forEach((snap, idx) => {
+            const spec = uniqueSpecs[idx];
+            let windowStartMs = nowMs;
+            let count = 0;
 
-        if (snap.exists) {
-            const data = snap.data() || {};
-            const startTs = data.windowStart as admin.firestore.Timestamp | undefined;
-            const storedCount = Number(data.count || 0);
+            if (snap.exists) {
+                const data = snap.data() || {};
+                const startTs = data.windowStart as admin.firestore.Timestamp | undefined;
+                const storedCount = Number(data.count || 0);
 
-            if (startTs) {
-                windowStartMs = startTs.toMillis();
+                if (startTs) {
+                    windowStartMs = startTs.toMillis();
+                }
+
+                if (nowMs - windowStartMs < spec.windowMs) {
+                    count = storedCount;
+                }
             }
 
-            if (nowMs - windowStartMs < RATE_LIMIT_WINDOW_MS) {
-                count = storedCount;
-            } else {
-                windowStartMs = nowMs;
-                count = 0;
+            if (count >= spec.maxAttempts) {
+                throw new HttpsError(
+                    "resource-exhausted",
+                    "Too many booking attempts. Please try again later."
+                );
             }
-        }
+        });
 
-        if (count >= RATE_LIMIT_MAX_ATTEMPTS) {
-            throw new HttpsError(
-                "resource-exhausted",
-                "Too many booking attempts. Please try again later."
+        snaps.forEach((snap, idx) => {
+            const spec = uniqueSpecs[idx];
+            const ref = refs[idx];
+            let windowStartMs = nowMs;
+            let count = 0;
+
+            if (snap.exists) {
+                const data = snap.data() || {};
+                const startTs = data.windowStart as admin.firestore.Timestamp | undefined;
+                const storedCount = Number(data.count || 0);
+
+                if (startTs) {
+                    windowStartMs = startTs.toMillis();
+                }
+
+                if (nowMs - windowStartMs < spec.windowMs) {
+                    count = storedCount;
+                } else {
+                    windowStartMs = nowMs;
+                    count = 0;
+                }
+            }
+
+            transaction.set(
+                ref,
+                {
+                    windowStart: admin.firestore.Timestamp.fromMillis(windowStartMs),
+                    count: count + 1,
+                    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+                },
+                { merge: true }
             );
-        }
-
-        transaction.set(
-            ref,
-            {
-                windowStart: admin.firestore.Timestamp.fromMillis(windowStartMs),
-                count: count + 1,
-                updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-            },
-            { merge: true }
-        );
+        });
     });
+}
+
+async function verifyGuestCaptcha(
+    captchaToken: string | undefined,
+    rawRequest: { ip?: string; headers?: Record<string, string | string[] | undefined> } | undefined
+): Promise<void> {
+    const secret = process.env.BOOKING_RECAPTCHA_SECRET;
+    if (!secret) {
+        console.warn("[createBookingAndReserve] BOOKING_RECAPTCHA_SECRET is not set; captcha validation skipped.");
+        return;
+    }
+
+    const token = String(captchaToken || "").trim();
+    if (!token) {
+        throw new HttpsError("invalid-argument", "captchaToken is required for guest bookings.");
+    }
+
+    const ip = getClientIp(rawRequest);
+    const body = new URLSearchParams({
+        secret,
+        response: token,
+        remoteip: ip,
+    });
+
+    let response: Response;
+    try {
+        response = await fetch(CAPTCHA_VERIFY_URL, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/x-www-form-urlencoded",
+            },
+            body: body.toString(),
+        });
+    } catch {
+        throw new HttpsError("unavailable", "Captcha verification failed.");
+    }
+
+    let data: Record<string, unknown> = {};
+    try {
+        data = await response.json() as Record<string, unknown>;
+    } catch {
+        throw new HttpsError("internal", "Invalid captcha verification response.");
+    }
+
+    if (!response.ok || data.success !== true) {
+        throw new HttpsError("permission-denied", "Captcha verification failed.");
+    }
 }
 
 // ─── User Private Profile Helpers ───────────────────────────────────────────
@@ -386,10 +497,87 @@ async function getOrInitPrivateProfile(userId: string): Promise<Record<string, u
     return initial;
 }
 
+function getActiveUnitHolds(
+    rawHolds: unknown,
+    nowMs: number
+): Record<string, { start: string; end: string; expiresAt: admin.firestore.Timestamp }> {
+    const active: Record<string, { start: string; end: string; expiresAt: admin.firestore.Timestamp }> = {};
+    if (!rawHolds || typeof rawHolds !== "object") return active;
+
+    Object.entries(rawHolds as Record<string, unknown>).forEach(([holdId, holdValue]) => {
+        if (!holdValue || typeof holdValue !== "object") return;
+        const hold = holdValue as { start?: unknown; end?: unknown; expiresAt?: unknown };
+        if (typeof hold.start !== "string" || typeof hold.end !== "string") return;
+        if (!(hold.expiresAt instanceof admin.firestore.Timestamp)) return;
+        if (hold.expiresAt.toMillis() <= nowMs) return;
+        active[holdId] = {
+            start: hold.start,
+            end: hold.end,
+            expiresAt: hold.expiresAt,
+        };
+    });
+
+    return active;
+}
+
+function hasHoldOverlap(
+    holds: Record<string, { start: string; end: string; expiresAt: admin.firestore.Timestamp }>,
+    startDate: Date,
+    endDate: Date,
+    excludeHoldId?: string
+): boolean {
+    return Object.entries(holds).some(([holdId, hold]) => {
+        if (excludeHoldId && holdId === excludeHoldId) return false;
+        const holdStart = parseDateOnly(normalizeDateOnly(hold.start));
+        const holdEnd = parseDateOnly(normalizeDateOnly(hold.end));
+        return startDate <= holdEnd && endDate >= holdStart;
+    });
+}
+
+async function releaseBookingHold(
+    holdRef: admin.firestore.DocumentReference,
+    holdId: string,
+    roomRef: admin.firestore.DocumentReference | null,
+    unitId: string | null,
+    reason: string,
+    status: "failed" | "expired" = "failed"
+): Promise<void> {
+    await db.runTransaction(async (transaction) => {
+        if (roomRef && unitId) {
+            const unitRef = roomRef.collection("units").doc(unitId);
+            const unitSnap = await transaction.get(unitRef);
+            if (unitSnap.exists) {
+                const unitData = unitSnap.data() || {};
+                const activeHolds = getActiveUnitHolds(unitData.holds, Date.now());
+                if (activeHolds[holdId]) {
+                    delete activeHolds[holdId];
+                }
+                transaction.update(unitRef, { holds: activeHolds });
+            }
+        }
+
+        const patch: Record<string, unknown> = {
+            status,
+            failureReason: reason,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        };
+        if (status === "failed") {
+            patch.failedAt = admin.firestore.FieldValue.serverTimestamp();
+        }
+        if (status === "expired") {
+            patch.expiredAt = admin.firestore.FieldValue.serverTimestamp();
+        }
+        transaction.set(holdRef, patch, { merge: true });
+    });
+}
+
 // ─── Cloud Functions ────────────────────────────────────────────────────────
 
 export const createBookingAndReserve = onCall(
-    { region: "europe-west1" },
+    {
+        region: "europe-west1",
+        enforceAppCheck: true,
+    },
     async (request) => {
         const payload = request.data as Partial<CreateBookingPayload>;
 
@@ -439,8 +627,13 @@ export const createBookingAndReserve = onCall(
             | { ip?: string; headers?: Record<string, string | string[] | undefined> }
             | undefined;
 
-        const rateLimitKey = getRateLimitKey(ownerUid, rawRequest, email);
-        await enforceBookingRateLimit(rateLimitKey);
+        if (!ownerUid) {
+            const captchaToken = String(payload.captcha_token ?? payload.captchaToken ?? "");
+            await verifyGuestCaptcha(captchaToken, rawRequest);
+        }
+
+        const rateLimitSpecs = getBookingRateLimitSpecs(ownerUid, rawRequest, email, roomId, startDateStr);
+        await enforceBookingRateLimit(rateLimitSpecs);
 
         const roomRef = db.collection("rooms").doc(String(roomId));
         const roomSnap = await roomRef.get();
@@ -454,6 +647,9 @@ export const createBookingAndReserve = onCall(
 
         let unitRef: admin.firestore.DocumentReference | null = null;
         let initialUnitName: string | null = null;
+        const holdRef = db.collection("booking_holds").doc();
+        const holdId = holdRef.id;
+        const holdExpiresAt = admin.firestore.Timestamp.fromMillis(Date.now() + HOLD_TTL_MS);
 
         if (bookingType === "room") {
             unitRef = roomRef.collection("units").doc(unitId);
@@ -470,6 +666,51 @@ export const createBookingAndReserve = onCall(
             }
         }
 
+        await db.runTransaction(async (transaction) => {
+            if (unitRef) {
+                const unitSnap = await transaction.get(unitRef);
+                if (!unitSnap.exists) {
+                    throw new HttpsError("not-found", "Unit not found.");
+                }
+
+                const unitData = unitSnap.data() || {};
+                const nowMs = Date.now();
+                const activeHolds = getActiveUnitHolds(unitData.holds, nowMs);
+
+                if (hasBookingOverlap(unitData.bookings, startDate, endDate)) {
+                    throw new HttpsError("failed-precondition", "Selected dates are no longer available.");
+                }
+                if (hasHoldOverlap(activeHolds, startDate, endDate)) {
+                    throw new HttpsError("failed-precondition", "Selected dates are temporarily reserved.");
+                }
+
+                const updatedHolds = {
+                    ...activeHolds,
+                    [holdId]: {
+                        start: startDateStr,
+                        end: endDateStr,
+                        expiresAt: holdExpiresAt,
+                    },
+                };
+
+                transaction.update(unitRef, { holds: updatedHolds });
+            }
+
+            transaction.set(holdRef, {
+                holdId,
+                status: "pending",
+                bookingType,
+                ownerUid: ownerUid || null,
+                roomId,
+                unitId: bookingType === "room" ? unitId : null,
+                startDate: startDateStr,
+                endDate: endDateStr,
+                expiresAt: holdExpiresAt,
+                createdAt: admin.firestore.FieldValue.serverTimestamp(),
+                updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            });
+        });
+
         const wordpressPayload: Record<string, unknown> = {
             dates,
             name,
@@ -479,6 +720,7 @@ export const createBookingAndReserve = onCall(
             resource_id: resourceId,
             check_in: payload.check_in || "15:00",
             check_out: payload.check_out || "12:00",
+            idempotency_key: holdId,
         };
 
         if (bookingType === "room") {
@@ -489,10 +731,18 @@ export const createBookingAndReserve = onCall(
             wordpressPayload.license_plate = typeof payload.license_plate === "string" ? payload.license_plate : "";
         }
 
-        const providerResult = await callWordPressCreateBooking(wordpressPayload);
+        let providerResult: Record<string, unknown>;
+        try {
+            providerResult = await callWordPressCreateBooking(wordpressPayload);
+        } catch (error) {
+            await releaseBookingHold(holdRef, holdId, roomRef, bookingType === "room" ? unitId : null, "provider_rejected");
+            throw error;
+        }
+
         const bookingId = String(providerResult.booking_id ?? providerResult.bookingId ?? "").trim();
 
         if (!bookingId) {
+            await releaseBookingHold(holdRef, holdId, roomRef, bookingType === "room" ? unitId : null, "missing_booking_id");
             throw new HttpsError("internal", "Booking provider did not return a booking ID.");
         }
 
@@ -503,132 +753,175 @@ export const createBookingAndReserve = onCall(
 
         const createdAtIso = new Date().toISOString();
 
-        const transactionResult = await db.runTransaction(async (transaction): Promise<BookingSummaryResult> => {
-            let finalUnitName = initialUnitName;
+        let transactionResult: BookingSummaryResult;
+        try {
+            transactionResult = await db.runTransaction(async (transaction): Promise<BookingSummaryResult> => {
+                let finalUnitName = initialUnitName;
 
-            if (unitRef) {
-                const unitSnapTx = await transaction.get(unitRef);
-                if (!unitSnapTx.exists) {
-                    throw new HttpsError("not-found", "Unit not found.");
+                const holdSnap = await transaction.get(holdRef);
+                if (!holdSnap.exists) {
+                    throw new HttpsError("failed-precondition", "Booking hold was not found.");
+                }
+                const holdData = holdSnap.data() || {};
+                const holdStatus = String(holdData.status || "");
+                const holdExpires = holdData.expiresAt as admin.firestore.Timestamp | undefined;
+                if (holdStatus !== "pending") {
+                    throw new HttpsError("failed-precondition", "Booking hold is no longer active.");
+                }
+                if (!holdExpires || holdExpires.toMillis() <= Date.now()) {
+                    throw new HttpsError("failed-precondition", "Booking hold expired.");
                 }
 
-                const unitDataTx = unitSnapTx.data() || {};
-                finalUnitName = typeof unitDataTx.name === "string" ? unitDataTx.name : unitId;
+                if (unitRef) {
+                    const unitSnapTx = await transaction.get(unitRef);
+                    if (!unitSnapTx.exists) {
+                        throw new HttpsError("not-found", "Unit not found.");
+                    }
 
-                if (hasBookingOverlap(unitDataTx.bookings, startDate, endDate)) {
-                    throw new HttpsError("failed-precondition", "Selected dates are no longer available.");
+                    const unitDataTx = unitSnapTx.data() || {};
+                    finalUnitName = typeof unitDataTx.name === "string" ? unitDataTx.name : unitId;
+                    const activeHolds = getActiveUnitHolds(unitDataTx.holds, Date.now());
+
+                    if (hasBookingOverlap(unitDataTx.bookings, startDate, endDate)) {
+                        throw new HttpsError("failed-precondition", "Selected dates are no longer available.");
+                    }
+                    if (!activeHolds[holdId]) {
+                        throw new HttpsError("failed-precondition", "Booking hold is missing.");
+                    }
+                    if (hasHoldOverlap(activeHolds, startDate, endDate, holdId)) {
+                        throw new HttpsError("failed-precondition", "Selected dates are temporarily reserved.");
+                    }
+
+                    delete activeHolds[holdId];
+                    transaction.update(unitRef, {
+                        holds: activeHolds,
+                        bookings: admin.firestore.FieldValue.arrayUnion({
+                            id: bookingId,
+                            start: startDateStr,
+                            end: endDateStr,
+                        }),
+                    });
                 }
 
-                transaction.update(unitRef, {
-                    bookings: admin.firestore.FieldValue.arrayUnion({
-                        id: bookingId,
-                        start: startDateStr,
-                        end: endDateStr,
-                    }),
-                });
-            }
+                const orderRef = db.collection("orders").doc(bookingId);
+                const existingOrderSnap = await transaction.get(orderRef);
 
-            const orderRef = db.collection("orders").doc(bookingId);
-            const existingOrderSnap = await transaction.get(orderRef);
+                if (existingOrderSnap.exists) {
+                    const existing = existingOrderSnap.data() || {};
+                    transaction.set(holdRef, {
+                        status: "confirmed",
+                        bookingId,
+                        finalizedAt: admin.firestore.FieldValue.serverTimestamp(),
+                        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+                    }, { merge: true });
 
-            if (existingOrderSnap.exists) {
-                const existing = existingOrderSnap.data() || {};
-                return {
+                    return {
+                        bookingId,
+                        unitName: typeof existing.unitName === "string" ? existing.unitName : finalUnitName,
+                        itemTitle: typeof existing.itemTitle === "string" ? existing.itemTitle : roomTitle,
+                        totalPrice: Number(existing.totalPrice || totalPrice),
+                        nights: Number(existing.nights || nights),
+                        guests: {
+                            adults: Number((existing.guests as { adults?: unknown } | undefined)?.adults || adults),
+                            children: Number((existing.guests as { children?: unknown } | undefined)?.children || children),
+                        },
+                        alreadyExisted: true,
+                    };
+                }
+
+                transaction.set(orderRef, {
                     bookingId,
-                    unitName: typeof existing.unitName === "string" ? existing.unitName : finalUnitName,
-                    itemTitle: typeof existing.itemTitle === "string" ? existing.itemTitle : roomTitle,
-                    totalPrice: Number(existing.totalPrice || totalPrice),
-                    nights: Number(existing.nights || nights),
-                    guests: {
-                        adults: Number((existing.guests as { adults?: unknown } | undefined)?.adults || adults),
-                        children: Number((existing.guests as { children?: unknown } | undefined)?.children || children),
-                    },
-                    alreadyExisted: true,
-                };
-            }
-
-            transaction.set(orderRef, {
-                bookingId,
-                ownerUid: ownerUid || null,
-                bookingType,
-                roomId,
-                unitId: bookingType === "room" ? unitId : null,
-                resourceId,
-                itemTitle: roomTitle,
-                unitName: finalUnitName,
-                dates,
-                startDate: startDateStr,
-                endDate: endDateStr,
-                guests: {
-                    adults,
-                    children,
-                },
-                customer: {
-                    name,
-                    lastName,
-                    email,
-                    phone,
-                },
-                status: "confirmed",
-                pricePerNight,
-                nights,
-                totalPrice,
-                createdAt: admin.firestore.FieldValue.serverTimestamp(),
-                updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-            });
-
-            if (ownerUid) {
-                const userBookingRef = db
-                    .collection("users")
-                    .doc(ownerUid)
-                    .collection("bookings")
-                    .doc(bookingId);
-
-                transaction.set(userBookingRef, {
-                    bookingId,
+                    ownerUid: ownerUid || null,
+                    bookingType,
+                    roomId,
+                    unitId: bookingType === "room" ? unitId : null,
+                    resourceId,
                     itemTitle: roomTitle,
                     unitName: finalUnitName,
-                    dates: `${startDateStr} - ${endDateStr}`,
+                    dates,
+                    startDate: startDateStr,
+                    endDate: endDateStr,
+                    guests: {
+                        adults,
+                        children,
+                    },
+                    customer: {
+                        name,
+                        lastName,
+                        email,
+                        phone,
+                    },
+                    status: "confirmed",
+                    pricePerNight,
+                    nights,
+                    totalPrice,
+                    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+                    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+                });
+
+                if (ownerUid) {
+                    const userBookingRef = db
+                        .collection("users")
+                        .doc(ownerUid)
+                        .collection("bookings")
+                        .doc(bookingId);
+
+                    transaction.set(userBookingRef, {
+                        bookingId,
+                        itemTitle: roomTitle,
+                        unitName: finalUnitName,
+                        dates: `${startDateStr} - ${endDateStr}`,
+                        nights,
+                        guests: {
+                            adults,
+                            children,
+                        },
+                        totalPrice,
+                        status: "confirmed",
+                        createdAt: createdAtIso,
+                    });
+
+                    const userPrivateRef = db.collection("users_private").doc(ownerUid);
+                    const privateSnap = await transaction.get(userPrivateRef);
+
+                    const privateUpdate: Record<string, unknown> = {
+                        orderCount: admin.firestore.FieldValue.increment(1),
+                        lastOrderDate: admin.firestore.FieldValue.serverTimestamp(),
+                        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+                    };
+
+                    if (!privateSnap.exists) {
+                        privateUpdate.accountCreatedAt = admin.firestore.FieldValue.serverTimestamp();
+                        privateUpdate.createdAt = admin.firestore.FieldValue.serverTimestamp();
+                    }
+
+                    transaction.set(userPrivateRef, privateUpdate, { merge: true });
+                }
+
+                transaction.set(holdRef, {
+                    status: "confirmed",
+                    bookingId,
+                    finalizedAt: admin.firestore.FieldValue.serverTimestamp(),
+                    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+                }, { merge: true });
+
+                return {
+                    bookingId,
+                    unitName: finalUnitName,
+                    itemTitle: roomTitle,
+                    totalPrice,
                     nights,
                     guests: {
                         adults,
                         children,
                     },
-                    totalPrice,
-                    status: "confirmed",
-                    createdAt: createdAtIso,
-                });
-
-                const userPrivateRef = db.collection("users_private").doc(ownerUid);
-                const privateSnap = await transaction.get(userPrivateRef);
-
-                const privateUpdate: Record<string, unknown> = {
-                    orderCount: admin.firestore.FieldValue.increment(1),
-                    lastOrderDate: admin.firestore.FieldValue.serverTimestamp(),
-                    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+                    alreadyExisted: false,
                 };
-
-                if (!privateSnap.exists) {
-                    privateUpdate.accountCreatedAt = admin.firestore.FieldValue.serverTimestamp();
-                    privateUpdate.createdAt = admin.firestore.FieldValue.serverTimestamp();
-                }
-
-                transaction.set(userPrivateRef, privateUpdate, { merge: true });
-            }
-
-            return {
-                bookingId,
-                unitName: finalUnitName,
-                itemTitle: roomTitle,
-                totalPrice,
-                nights,
-                guests: {
-                    adults,
-                    children,
-                },
-                alreadyExisted: false,
-            };
-        });
+            });
+        } catch (error) {
+            await releaseBookingHold(holdRef, holdId, roomRef, bookingType === "room" ? unitId : null, "finalization_failed");
+            throw error;
+        }
 
         return {
             booking_id: transactionResult.bookingId,
@@ -1002,6 +1295,55 @@ export const onNewCampaign = onDocumentCreated(
         console.log(
             `[onNewCampaign] Sent notification for campaign ${event.params.campaignId} to ${sent} devices`
         );
+    }
+);
+
+export const cleanupExpiredBookingHolds = onSchedule(
+    {
+        schedule: "*/10 * * * *",
+        region: "europe-west1",
+        timeZone: "Europe/Bucharest",
+    },
+    async () => {
+        const now = admin.firestore.Timestamp.now();
+        const staleHoldsSnap = await db
+            .collection("booking_holds")
+            .where("status", "==", "pending")
+            .where("expiresAt", "<=", now)
+            .limit(200)
+            .get();
+
+        if (staleHoldsSnap.empty) return;
+
+        let cleaned = 0;
+        for (const holdDoc of staleHoldsSnap.docs) {
+            const hold = holdDoc.data();
+            const bookingType = String(hold.bookingType || "");
+            const roomId = Number(hold.roomId);
+            const unitId = typeof hold.unitId === "string" ? hold.unitId : null;
+
+            if (bookingType === "room" && Number.isFinite(roomId) && unitId) {
+                const roomRef = db.collection("rooms").doc(String(roomId));
+                await releaseBookingHold(
+                    holdDoc.ref,
+                    holdDoc.id,
+                    roomRef,
+                    unitId,
+                    "hold_expired",
+                    "expired"
+                );
+            } else {
+                await holdDoc.ref.set({
+                    status: "expired",
+                    failureReason: "hold_expired",
+                    expiredAt: admin.firestore.FieldValue.serverTimestamp(),
+                    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+                }, { merge: true });
+            }
+            cleaned += 1;
+        }
+
+        console.log(`[cleanupExpiredBookingHolds] Cleaned ${cleaned} expired booking holds`);
     }
 );
 
