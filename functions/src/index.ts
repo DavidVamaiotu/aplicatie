@@ -9,6 +9,7 @@ admin.initializeApp();
 const db = admin.firestore();
 
 const WORDPRESS_BOOKING_URL = "https://www.marinapark.ro/wp-json/wpbc-custom/v1/create-booking";
+const WORDPRESS_REQUEST_TIMEOUT_MS = 12000;
 const RATE_LIMIT_MAX_ATTEMPTS = 10;
 const RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000;
 const RATE_LIMIT_ROOM_MAX_ATTEMPTS = 5;
@@ -348,14 +349,23 @@ async function callWordPressCreateBooking(
         headers["X-Marina-Timestamp"] = timestamp;
     }
 
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), WORDPRESS_REQUEST_TIMEOUT_MS);
+
     try {
         response = await fetch(WORDPRESS_BOOKING_URL, {
             method: "POST",
             headers,
             body,
+            signal: controller.signal,
         });
-    } catch {
+    } catch (error: unknown) {
+        if (error instanceof Error && error.name === "AbortError") {
+            throw new HttpsError("deadline-exceeded", "Booking provider request timed out.");
+        }
         throw new HttpsError("unavailable", "Could not reach booking provider.");
+    } finally {
+        clearTimeout(timeout);
     }
 
     let data: Record<string, unknown> = {};
@@ -918,10 +928,6 @@ export const createBookingAndReserve = onCall(
 
             const unitData = unitSnap.data() || {};
             initialUnitName = typeof unitData.name === "string" ? unitData.name : unitId;
-
-            if (hasBookingOverlap(unitData.bookings, startDate, endDate)) {
-                throw new HttpsError("failed-precondition", "Selected dates are no longer available.");
-            }
         }
 
         await db.runTransaction(async (transaction) => {

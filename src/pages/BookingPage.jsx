@@ -7,6 +7,7 @@ import { fetchUserDiscounts, getRoomDiscounts, getBestDiscount } from '../servic
 import { useParams, useNavigate } from 'react-router-dom';
 import { format, addDays, isSameDay, differenceInDays } from 'date-fns';
 import { getItemById } from '../data/rooms';
+import { getUnitsForRoom, getUnavailableDatesFromUnits } from '../data/units';
 import Button from '../components/Button';
 import BookingCalendar from "../components/BookingCalendar";
 import SuccessModal from '../components/SuccessModal';
@@ -86,29 +87,17 @@ const BookingPage = () => {
             const data = await getItemById(id);
             setItem(data);
 
-            // Fetch fully booked dates for this room type
+            // Fetch units once, then derive all unit/date UI state locally.
             if (data) {
-                const { getUnavailableDatesForRoom } = await import('../data/units');
-                const dates = await getUnavailableDatesForRoom(data.id);
-                setFullyBookedDates(dates);
+                const units = await getUnitsForRoom(data.id);
+                setAllUnits(units);
+                setFullyBookedDates(getUnavailableDatesFromUnits(units));
             }
 
             setFetchingItem(false);
         };
         fetchItem();
     }, [id]);
-
-    // Fetch all units when item loads
-    React.useEffect(() => {
-        const fetchUnits = async () => {
-            if (item) {
-                const { getUnitsForRoom } = await import('../data/units');
-                const units = await getUnitsForRoom(item.id);
-                setAllUnits(units);
-            }
-        };
-        fetchUnits();
-    }, [item]);
 
     if (fetchingItem) return (
         <div className="min-h-screen flex items-center justify-center bg-gradient-dark">
@@ -364,10 +353,9 @@ const BookingPage = () => {
                             <div className="relative">
                                 <select
                                     value={selectedUnit?.id || ''}
-                                    onChange={async (e) => {
+                                    onChange={(e) => {
                                         const unitId = e.target.value;
-                                        const { getUnit } = await import('../data/units');
-                                        const unit = await getUnit(item.id, unitId);
+                                        const unit = allUnits.find((entry) => entry.id === unitId) || null;
                                         setSelectedUnit(unit);
                                         setRange(undefined);
                                     }}

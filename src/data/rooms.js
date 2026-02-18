@@ -1,4 +1,4 @@
-import { collection, getDocs, doc, getDoc } from 'firebase/firestore';
+import { collection, getDocs, doc, getDoc, query, where } from 'firebase/firestore';
 import { db } from '../firebase';
 
 // Static data kept for reference or fallback
@@ -78,15 +78,47 @@ export const campingSpots = [
     }
 ];
 
+const ROOM_CACHE_TTL_MS = 60 * 1000;
+const roomTypeCache = {
+    room: { data: null, expiresAt: 0, promise: null },
+    camping: { data: null, expiresAt: 0, promise: null }
+};
+
+const readRoomsByType = async (type) => {
+    const now = Date.now();
+    const cache = roomTypeCache[type];
+    if (!cache) return [];
+
+    if (cache.data && cache.expiresAt > now) {
+        return cache.data;
+    }
+
+    if (cache.promise) {
+        return cache.promise;
+    }
+
+    cache.promise = (async () => {
+        const q = query(collection(db, 'rooms'), where('type', '==', type));
+        const querySnapshot = await getDocs(q);
+        const items = querySnapshot.docs.map(docItem => ({ id: parseInt(docItem.id), ...docItem.data() }));
+        cache.data = items;
+        cache.expiresAt = Date.now() + ROOM_CACHE_TTL_MS;
+        return items;
+    })()
+        .finally(() => {
+            cache.promise = null;
+        });
+
+    return cache.promise;
+};
+
 /**
  * Fetches all rooms from Firestore.
  * @returns {Promise<Array>} List of rooms.
  */
 export const getRooms = async () => {
     try {
-        const querySnapshot = await getDocs(collection(db, 'rooms'));
-        const items = querySnapshot.docs.map(doc => ({ id: parseInt(doc.id), ...doc.data() }));
-        return items.filter(item => item.type === 'room');
+        return await readRoomsByType('room');
     } catch (error) {
         console.error("Error fetching rooms:", error);
         return rooms; // Fallback to static data
@@ -99,9 +131,7 @@ export const getRooms = async () => {
  */
 export const getCampingSpots = async () => {
     try {
-        const querySnapshot = await getDocs(collection(db, 'rooms'));
-        const items = querySnapshot.docs.map(doc => ({ id: parseInt(doc.id), ...doc.data() }));
-        return items.filter(item => item.type === 'camping');
+        return await readRoomsByType('camping');
     } catch (error) {
         console.error("Error fetching camping spots:", error);
         return campingSpots; // Fallback to static data

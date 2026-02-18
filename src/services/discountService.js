@@ -1,5 +1,22 @@
 import { httpsCallable } from 'firebase/functions';
-import { functions } from '../firebase';
+import { auth, functions } from '../firebase';
+
+const DISCOUNT_CACHE_TTL_MS = 60 * 1000;
+let discountCache = {
+    uid: null,
+    data: null,
+    expiresAt: 0,
+    promise: null
+};
+
+export const clearDiscountCache = () => {
+    discountCache = {
+        uid: null,
+        data: null,
+        expiresAt: 0,
+        promise: null
+    };
+};
 
 /**
  * Fetch all eligible discounts for the current user.
@@ -7,10 +24,54 @@ import { functions } from '../firebase';
  * @returns {Promise<Array>} Array of eligible discount campaign objects.
  */
 export const fetchUserDiscounts = async () => {
+    const uid = auth.currentUser?.uid || null;
+    const now = Date.now();
+
+    if (
+        uid &&
+        discountCache.uid === uid &&
+        Array.isArray(discountCache.data) &&
+        discountCache.expiresAt > now
+    ) {
+        return discountCache.data;
+    }
+
+    if (uid && discountCache.uid === uid && discountCache.promise) {
+        return discountCache.promise;
+    }
+
     try {
         const fn = httpsCallable(functions, 'evaluateUserDiscounts');
-        const result = await fn();
-        return result.data.discounts || [];
+        const requestPromise = fn()
+            .then((result) => {
+                const discounts = result.data.discounts || [];
+                if (uid) {
+                    discountCache = {
+                        uid,
+                        data: discounts,
+                        expiresAt: Date.now() + DISCOUNT_CACHE_TTL_MS,
+                        promise: null
+                    };
+                }
+                return discounts;
+            })
+            .catch((error) => {
+                if (uid) {
+                    discountCache.promise = null;
+                }
+                throw error;
+            });
+
+        if (uid) {
+            discountCache = {
+                uid,
+                data: discountCache.uid === uid ? discountCache.data : null,
+                expiresAt: discountCache.uid === uid ? discountCache.expiresAt : 0,
+                promise: requestPromise
+            };
+        }
+
+        return await requestPromise;
     } catch (error) {
         console.error('Failed to fetch discounts:', error);
         return [];
@@ -27,6 +88,7 @@ export const fetchUserDiscounts = async () => {
 export const applyDiscountToOrder = async (campaignId, orderId) => {
     const fn = httpsCallable(functions, 'applyDiscount');
     const result = await fn({ campaignId, orderId });
+    clearDiscountCache();
     return result.data;
 };
 

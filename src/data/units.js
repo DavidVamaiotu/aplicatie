@@ -56,6 +56,10 @@ export const getAvailableUnits = async (roomId, dates) => {
 
 export const getUnavailableDatesForRoom = async (roomId) => {
     const units = await getUnitsForRoom(roomId);
+    return getUnavailableDatesFromUnits(units);
+};
+
+export const getUnavailableDatesFromUnits = (units) => {
     if (units.length === 0) return [];
 
     // Map of date -> count of booked units

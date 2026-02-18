@@ -9,6 +9,7 @@ import { useLocalCache } from '../hooks/useLocalCache';
 import { sendPasswordResetEmail } from 'firebase/auth';
 import { auth } from '../firebase';
 import { Capacitor } from '@capacitor/core';
+import { initPushNotifications, removePushToken } from '../services/pushNotificationService';
 
 const Account = () => {
     const { darkMode, toggleDarkMode } = useTheme();
@@ -146,14 +147,9 @@ const Account = () => {
 
         if (Capacitor.isNativePlatform()) {
             try {
-                const { PushNotifications } = await import('@capacitor/push-notifications');
                 if (newValue) {
-                    // Re-register for notifications
-                    const { initPushNotifications } = await import('../services/pushNotificationService');
                     await initPushNotifications(user?.uid);
                 } else {
-                    // Unregister — remove token
-                    const { removePushToken } = await import('../services/pushNotificationService');
                     await removePushToken(user?.uid);
                 }
             } catch (err) {

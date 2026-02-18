@@ -1,40 +1,48 @@
 import React, { useEffect, useRef, useState } from 'react';
 
 /**
- * Wrapper component with parallax + pop effect on room cards
- * Cards move slower than scroll speed and scale up when centered
+ * Lightweight reveal/parallax effect driven by IntersectionObserver.
+ * Avoids per-card scroll listeners and state updates on every scroll tick.
  */
 const ScrollReveal = ({ children, className = '' }) => {
     const ref = useRef(null);
-    const [transform, setTransform] = useState({ scale: 1, translateY: 0 });
+    const [transform, setTransform] = useState({ scale: 0.98, translateY: 10, opacity: 0.75 });
 
     useEffect(() => {
-        const handleScroll = () => {
-            if (!ref.current) return;
+        if (!ref.current || typeof window === 'undefined') return;
 
-            const rect = ref.current.getBoundingClientRect();
-            const viewportHeight = window.innerHeight;
-            const elementCenter = rect.top + rect.height / 2;
-            const viewportCenter = viewportHeight / 2;
+        const thresholds = [0, 0.15, 0.3, 0.45, 0.6, 0.75, 1];
+        const observer = new IntersectionObserver(
+            ([entry]) => {
+                const ratio = Math.max(0, Math.min(1, entry.intersectionRatio || 0));
+                const nextScale = 0.98 + ratio * 0.05;
+                const nextTranslate = (1 - ratio) * 10;
+                const nextOpacity = 0.75 + ratio * 0.25;
 
-            // Calculate how centered the element is (0 = at center, 1 = at edge)
-            const distanceFromCenter = Math.abs(elementCenter - viewportCenter) / (viewportHeight / 2);
-            const centeredness = 1 - Math.min(distanceFromCenter, 1);
+                setTransform((prev) => {
+                    if (
+                        Math.abs(prev.scale - nextScale) < 0.001 &&
+                        Math.abs(prev.translateY - nextTranslate) < 0.1 &&
+                        Math.abs(prev.opacity - nextOpacity) < 0.01
+                    ) {
+                        return prev;
+                    }
+                    return {
+                        scale: nextScale,
+                        translateY: nextTranslate,
+                        opacity: nextOpacity,
+                    };
+                });
+            },
+            {
+                root: null,
+                rootMargin: '0px 0px -10% 0px',
+                threshold: thresholds,
+            }
+        );
 
-            // Scale: 0.98 at edges, 1.03 at center
-            const scale = 0.98 + centeredness * 0.05;
-
-            // Parallax: move cards slightly based on their position relative to viewport
-            // Cards above center move down, cards below center move up (slower movement)
-            const parallaxOffset = (viewportCenter - elementCenter) * 0.08;
-
-            setTransform({ scale, translateY: parallaxOffset });
-        };
-
-        window.addEventListener('scroll', handleScroll, { passive: true });
-        handleScroll();
-
-        return () => window.removeEventListener('scroll', handleScroll);
+        observer.observe(ref.current);
+        return () => observer.disconnect();
     }, []);
 
     return (
@@ -43,7 +51,9 @@ const ScrollReveal = ({ children, className = '' }) => {
             className={className}
             style={{
                 transform: `translateY(${transform.translateY}px) scale(${transform.scale})`,
-                transition: 'transform 0.15s ease-out'
+                opacity: transform.opacity,
+                transition: 'transform 0.2s ease-out, opacity 0.2s ease-out',
+                willChange: 'transform, opacity'
             }}
         >
             {children}
@@ -52,4 +62,3 @@ const ScrollReveal = ({ children, className = '' }) => {
 };
 
 export default ScrollReveal;
-

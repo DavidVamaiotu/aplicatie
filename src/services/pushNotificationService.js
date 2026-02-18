@@ -6,6 +6,44 @@ import { db } from '../firebase';
 // ─── Internal state ─────────────────────────────────────────────────────────
 let currentToken = null;
 let initialized = false;
+let listenersBound = false;
+let registerPromise = null;
+let currentUserId = null;
+
+function bindPushListeners() {
+    if (listenersBound) return;
+
+    PushNotifications.addListener('registration', async (token) => {
+        console.log('[Push] FCM Token:', token.value);
+        currentToken = token.value;
+
+        if (currentUserId) {
+            try {
+                const userRef = doc(db, 'users', currentUserId);
+                await updateDoc(userRef, {
+                    fcmTokens: arrayUnion(token.value)
+                });
+                console.log('[Push] Token stored in Firestore');
+            } catch (err) {
+                console.error('[Push] Failed to store token:', err);
+            }
+        }
+    });
+
+    PushNotifications.addListener('registrationError', (error) => {
+        console.error('[Push] Registration error:', error);
+    });
+
+    PushNotifications.addListener('pushNotificationReceived', (notification) => {
+        console.log('[Push] Notification received in foreground:', notification);
+    });
+
+    PushNotifications.addListener('pushNotificationActionPerformed', (action) => {
+        console.log('[Push] Notification tapped:', action);
+    });
+
+    listenersBound = true;
+}
 
 /**
  * Initialize push notifications for the given user.
@@ -18,64 +56,42 @@ export async function initPushNotifications(userId) {
         return;
     }
 
+    currentUserId = userId || null;
+
     if (initialized) {
         console.log('[Push] Already initialized');
         return;
     }
 
+    if (registerPromise) {
+        await registerPromise;
+        return;
+    }
+
     try {
-        // 1. Check / request permission
-        let permStatus = await PushNotifications.checkPermissions();
+        registerPromise = (async () => {
+            let permStatus = await PushNotifications.checkPermissions();
 
-        if (permStatus.receive === 'prompt') {
-            permStatus = await PushNotifications.requestPermissions();
-        }
-
-        if (permStatus.receive !== 'granted') {
-            console.warn('[Push] Permission not granted');
-            return;
-        }
-
-        // 2. Register event listeners BEFORE calling register()
-        PushNotifications.addListener('registration', async (token) => {
-            console.log('[Push] FCM Token:', token.value);
-            currentToken = token.value;
-
-            // Store token in Firestore
-            if (userId) {
-                try {
-                    const userRef = doc(db, 'users', userId);
-                    await updateDoc(userRef, {
-                        fcmTokens: arrayUnion(token.value)
-                    });
-                    console.log('[Push] Token stored in Firestore');
-                } catch (err) {
-                    console.error('[Push] Failed to store token:', err);
-                }
+            if (permStatus.receive === 'prompt') {
+                permStatus = await PushNotifications.requestPermissions();
             }
-        });
 
-        PushNotifications.addListener('registrationError', (error) => {
-            console.error('[Push] Registration error:', error);
-        });
+            if (permStatus.receive !== 'granted') {
+                console.warn('[Push] Permission not granted');
+                return;
+            }
 
-        PushNotifications.addListener('pushNotificationReceived', (notification) => {
-            console.log('[Push] Notification received in foreground:', notification);
-            // Foreground notifications are handled by the OS with presentationOptions
-        });
+            bindPushListeners();
+            await PushNotifications.register();
+            initialized = true;
+            console.log('[Push] Registration initiated');
+        })();
 
-        PushNotifications.addListener('pushNotificationActionPerformed', (action) => {
-            console.log('[Push] Notification tapped:', action);
-            // You can add navigation logic here based on action.notification.data
-        });
-
-        // 3. Register with FCM
-        await PushNotifications.register();
-        initialized = true;
-        console.log('[Push] Registration initiated');
-
+        await registerPromise;
     } catch (err) {
         console.error('[Push] Init failed:', err);
+    } finally {
+        registerPromise = null;
     }
 }
 
@@ -84,24 +100,31 @@ export async function initPushNotifications(userId) {
  * Call this on logout so the user stops receiving notifications.
  */
 export async function removePushToken(userId) {
-    if (!Capacitor.isNativePlatform() || !currentToken || !userId) {
+    if (!Capacitor.isNativePlatform()) {
         return;
     }
 
-    try {
-        const userRef = doc(db, 'users', userId);
-        await updateDoc(userRef, {
-            fcmTokens: arrayRemove(currentToken)
-        });
-        console.log('[Push] Token removed from Firestore');
-    } catch (err) {
-        console.error('[Push] Failed to remove token:', err);
+    const targetUserId = userId || currentUserId;
+
+    if (currentToken && targetUserId) {
+        try {
+            const userRef = doc(db, 'users', targetUserId);
+            await updateDoc(userRef, {
+                fcmTokens: arrayRemove(currentToken)
+            });
+            console.log('[Push] Token removed from Firestore');
+        } catch (err) {
+            console.error('[Push] Failed to remove token:', err);
+        }
     }
 
-    // Reset state so re-login will re-register
     currentToken = null;
+    currentUserId = null;
     initialized = false;
+    registerPromise = null;
 
-    // Remove all listeners
-    await PushNotifications.removeAllListeners();
+    if (listenersBound) {
+        await PushNotifications.removeAllListeners();
+        listenersBound = false;
+    }
 }

@@ -3,6 +3,22 @@ import { DayPicker } from "react-day-picker";
 import { addDays, isSameDay, parseISO, format } from "date-fns";
 import { ro } from "date-fns/locale";
 
+function normalizeDateString(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  return raw.replace("T", " ").split(" ")[0];
+}
+
+function hasChainedBooking(startSet, endSet) {
+  if (!startSet || !endSet || startSet.size === 0 || endSet.size === 0) return false;
+  for (const endId of endSet) {
+    for (const startId of startSet) {
+      if (startId !== endId) return true;
+    }
+  }
+  return false;
+}
+
 export default function BookingCalendar({
   unavailableDates = [],
   bookings = [],
@@ -10,87 +26,111 @@ export default function BookingCalendar({
   onSelect,
   className
 }) {
-  // Process bookings to determine start, middle, and end of bookings
-  const { bookedStart, bookedMiddle, bookedEnd, chained } = useMemo(() => {
-    const start = [];
-    const middle = [];
-    const end = [];
-    const chained = [];
+  const {
+    bookedStart,
+    bookedMiddle,
+    bookedEnd,
+    chained,
+    sortedBookingStartDates
+  } = useMemo(() => {
+    const startIdsByDate = new Map();
+    const endIdsByDate = new Map();
+    const middleDates = new Set();
+    const allDates = new Set();
 
-    // If we have bookings data, use it as the primary source of truth
-    if (bookings && bookings.length > 0) {
-      // Create a map of date -> status based on bookings
-      // We need to know for each date if it's a start, end, or middle of ANY booking
-      // And specifically if it's a start/end of DIFFERENT bookings for chaining.
+    if (Array.isArray(bookings) && bookings.length > 0) {
+      bookings.forEach((booking, index) => {
+        const startStr = normalizeDateString(booking?.start);
+        const endStr = normalizeDateString(booking?.end);
+        if (!startStr || !endStr) return;
 
-      // Collect all relevant dates from bookings
-      const allDates = new Set();
-      bookings.forEach(b => {
-        // Add start and end
-        allDates.add(b.start);
-        allDates.add(b.end);
+        const startDate = parseISO(startStr);
+        const endDate = parseISO(endStr);
+        if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) return;
 
-        // Add middle dates
-        let curr = addDays(parseISO(b.start), 1);
-        const last = parseISO(b.end);
-        while (curr < last) {
-          allDates.add(format(curr, 'yyyy-MM-dd'));
-          curr = addDays(curr, 1);
-        }
-      });
+        const bookingId = String(booking?.id ?? index);
 
-      const sortedDates = Array.from(allDates).sort();
+        if (!startIdsByDate.has(startStr)) startIdsByDate.set(startStr, new Set());
+        if (!endIdsByDate.has(endStr)) endIdsByDate.set(endStr, new Set());
+        startIdsByDate.get(startStr).add(bookingId);
+        endIdsByDate.get(endStr).add(bookingId);
 
-      sortedDates.forEach(dateStr => {
-        const starts = bookings.filter(b => b.start === dateStr);
-        const ends = bookings.filter(b => b.end === dateStr);
+        allDates.add(startStr);
+        allDates.add(endStr);
 
-        // Check if it's in the middle of any booking
-        const isMiddle = bookings.some(b => dateStr > b.start && dateStr < b.end);
-
-        // Chained: Ends one booking AND Starts another (different IDs)
-        const isChained = ends.some(e => starts.some(s => s.id !== e.id));
-
-        if (isChained) {
-          chained.push(parseISO(dateStr));
-        } else if (starts.length > 0 && ends.length > 0) {
-          // Single day booking (Start = End)
-          start.push(parseISO(dateStr));
-          end.push(parseISO(dateStr));
-        } else if (starts.length > 0) {
-          start.push(parseISO(dateStr));
-        } else if (ends.length > 0) {
-          end.push(parseISO(dateStr));
-        } else if (isMiddle) {
-          middle.push(parseISO(dateStr));
+        let cursor = addDays(startDate, 1);
+        while (cursor < endDate) {
+          const mid = format(cursor, "yyyy-MM-dd");
+          middleDates.add(mid);
+          allDates.add(mid);
+          cursor = addDays(cursor, 1);
         }
       });
     }
 
-    return { bookedStart: start, bookedMiddle: middle, bookedEnd: end, chained };
+    const bookedStartDates = [];
+    const bookedMiddleDates = [];
+    const bookedEndDates = [];
+    const chainedDates = [];
+
+    Array.from(allDates)
+      .sort()
+      .forEach((dateStr) => {
+        const starts = startIdsByDate.get(dateStr);
+        const ends = endIdsByDate.get(dateStr);
+        const isMiddle = middleDates.has(dateStr);
+        const isChained = hasChainedBooking(starts, ends);
+        const parsedDate = parseISO(dateStr);
+        if (Number.isNaN(parsedDate.getTime())) return;
+
+        if (isChained) {
+          chainedDates.push(parsedDate);
+          return;
+        }
+
+        if (starts && ends) {
+          bookedStartDates.push(parsedDate);
+          bookedEndDates.push(parsedDate);
+          return;
+        }
+        if (starts) {
+          bookedStartDates.push(parsedDate);
+          return;
+        }
+        if (ends) {
+          bookedEndDates.push(parsedDate);
+          return;
+        }
+        if (isMiddle) {
+          bookedMiddleDates.push(parsedDate);
+        }
+      });
+
+    return {
+      bookedStart: bookedStartDates,
+      bookedMiddle: bookedMiddleDates,
+      bookedEnd: bookedEndDates,
+      chained: chainedDates,
+      sortedBookingStartDates: Array.from(startIdsByDate.keys()).sort(),
+    };
   }, [bookings]);
 
   const handleRangeSelect = (val, selectedDay, modifiers) => {
-    // Prevent selecting a booked_start date as the start of a range
-    // (We allow it as an end date, but not as a start date because the night is booked)
     const isStartingNewRange = !selected?.from || (selected?.from && selected?.to);
     if (isStartingNewRange && modifiers?.booked_start) {
       return;
     }
 
-    // If a full range is already selected, reset to the new clicked day
     if (selected?.from && selected?.to) {
       onSelect({ from: selectedDay, to: undefined });
       return;
     }
 
-    // Prevent deselecting the single selected day (double click behavior)
     if (!val) {
       onSelect({ from: selectedDay, to: undefined });
       return;
     }
 
-    // Prevent selecting the same day for from and to
     if (val?.from && val?.to && isSameDay(val.from, val.to)) {
       onSelect({ from: val.from, to: undefined });
       return;
@@ -99,42 +139,30 @@ export default function BookingCalendar({
     onSelect(val);
   };
 
-  // Calculate the closest booked date after the selected start date
   const disabledDays = useMemo(() => {
-    // Include both middle dates AND chained dates (fully booked turnover days)
-    let days = [...bookedMiddle, ...chained];
+    const days = [...bookedMiddle, ...chained];
 
     if (selected?.from && !selected?.to) {
       const selectedFromStr = format(selected.from, "yyyy-MM-dd");
-
-      // Disable dates before the selected start date
       days.push({ before: selected.from });
 
-      let nextBookedStr = null;
-
-      if (bookings && bookings.length > 0) {
-        // Find the earliest start date of a booking that starts AFTER the selected date
-        // AND is not the same booking (if we were editing, but here we are creating new)
-        // Actually, we just need to find the next unavailable date.
-        // If I select Dec 10, and there is a booking starting Dec 15, I can't book past Dec 15.
-        // The "next booked" date is the START of the next booking.
-        const futureBookings = bookings.filter(b => b.start > selectedFromStr).sort((a, b) => a.start.localeCompare(b.start));
-        if (futureBookings.length > 0) {
-          nextBookedStr = futureBookings[0].start;
-        }
-      } else {
-        // Fallback
-        const sortedUnavailable = unavailableDates.map(u => (typeof u === 'string' ? u : u.date)).sort();
-        nextBookedStr = sortedUnavailable.find(d => d > selectedFromStr);
-      }
+      const nextBookedStr = sortedBookingStartDates.find((date) => date > selectedFromStr) ||
+        unavailableDates
+          .map((value) => normalizeDateString(typeof value === "string" ? value : value?.date))
+          .filter(Boolean)
+          .sort()
+          .find((date) => date > selectedFromStr);
 
       if (nextBookedStr) {
-        days.push({ after: parseISO(nextBookedStr) });
+        const parsed = parseISO(nextBookedStr);
+        if (!Number.isNaN(parsed.getTime())) {
+          days.push({ after: parsed });
+        }
       }
     }
 
     return days;
-  }, [bookedMiddle, bookedStart, chained, selected?.from, selected?.to, unavailableDates, bookings]);
+  }, [bookedMiddle, chained, selected?.from, selected?.to, sortedBookingStartDates, unavailableDates]);
 
   return (
     <div className={`relative ${className || ''}`}>
@@ -149,13 +177,12 @@ export default function BookingCalendar({
           booked_start: bookedStart,
           booked_middle: bookedMiddle,
           booked_end: bookedEnd,
-          chained: chained,
+          chained,
           disabled: disabledDays
         }}
         classNames={{
           day_range_start: "rdp-day_range_start !bg-white !text-primary !rounded-l-md",
           day_range_end: "rdp-day_range_end !bg-white !text-primary !rounded-r-md",
-
         }}
         modifiersClassNames={{
           booked_start: "booked_start",
@@ -164,7 +191,7 @@ export default function BookingCalendar({
           chained: "chained"
         }}
         styles={{
-          day: { margin: 0, width: "40px", height: "40px" } // Ensure square cells for gradients
+          day: { margin: 0, width: "40px", height: "40px" }
         }}
       />
     </div>
