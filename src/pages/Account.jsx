@@ -11,6 +11,25 @@ import { auth } from '../firebase';
 import { Capacitor } from '@capacitor/core';
 import { initPushNotifications, removePushToken } from '../services/pushNotificationService';
 
+const PENDING_STATUSES = new Set(['pending', 'awaiting_approval', 'unapproved', 'in_asteptare', 'in asteptare']);
+const CONFIRMED_STATUSES = new Set(['confirmed', 'approved']);
+const CANCELLED_STATUSES = new Set(['cancelled', 'canceled', 'deleted', 'declined', 'rejected']);
+
+const normalizeBookingStatus = (rawStatus) => {
+    const status = String(rawStatus || '').toLowerCase().trim();
+    if (CONFIRMED_STATUSES.has(status)) return 'confirmed';
+    if (CANCELLED_STATUSES.has(status)) return 'cancelled';
+    if (PENDING_STATUSES.has(status)) return 'pending';
+    return 'pending';
+};
+
+const getBookingStatusLabel = (rawStatus) => {
+    const normalizedStatus = normalizeBookingStatus(rawStatus);
+    if (normalizedStatus === 'confirmed') return 'Confirmat';
+    if (normalizedStatus === 'cancelled') return 'Anulat';
+    return 'In asteptare';
+};
+
 const Account = () => {
     const { darkMode, toggleDarkMode } = useTheme();
     const { user, logout, updateUserProfile, loading: authLoading } = useAuth();
@@ -546,40 +565,42 @@ const Account = () => {
                                 </button>
                             </div>
                         ) : (
-                            bookings.map((booking, index) => (
-                                <div
-                                    key={booking.id}
-                                    className="booking-card"
-                                    style={{ animationDelay: `${index * 0.1}s` }}
-                                >
-                                    <div className="booking-card-header">
-                                        <div className="booking-status-wrapper">
-                                            <span className={`booking-status ${booking.status || 'confirmed'}`}>
-                                                {booking.status === 'confirmed' ? 'Confirmat' :
-                                                    booking.status === 'pending' ? 'În așteptare' : 'Anulat'}
-                                            </span>
+                            bookings.map((booking, index) => {
+                                const normalizedStatus = normalizeBookingStatus(booking.status);
+                                return (
+                                    <div
+                                        key={booking.id}
+                                        className="booking-card"
+                                        style={{ animationDelay: `${index * 0.1}s` }}
+                                    >
+                                        <div className="booking-card-header">
+                                            <div className="booking-status-wrapper">
+                                                <span className={`booking-status ${normalizedStatus}`}>
+                                                    {getBookingStatusLabel(booking.status)}
+                                                </span>
+                                            </div>
+                                            <span className="booking-nights">{booking.nights || 0} nopți</span>
                                         </div>
-                                        <span className="booking-nights">{booking.nights || 0} nopți</span>
-                                    </div>
 
-                                    <h4 className="booking-title">{booking.itemTitle || 'Rezervare'}</h4>
+                                        <h4 className="booking-title">{booking.itemTitle || 'Rezervare'}</h4>
 
-                                    <div className="booking-details">
-                                        <div className="booking-detail">
-                                            <MapPin size={14} />
-                                            <span>Marina Park, Vama Veche</span>
+                                        <div className="booking-details">
+                                            <div className="booking-detail">
+                                                <MapPin size={14} />
+                                                <span>Marina Park, Vama Veche</span>
+                                            </div>
+                                            <div className="booking-detail">
+                                                <Clock size={14} />
+                                                <span>{booking.dates || 'N/A'}</span>
+                                            </div>
                                         </div>
-                                        <div className="booking-detail">
-                                            <Clock size={14} />
-                                            <span>{booking.dates || 'N/A'}</span>
+
+                                        <div className="booking-card-footer">
+                                            <span className="booking-price">{booking.totalPrice || 0} RON</span>
                                         </div>
                                     </div>
-
-                                    <div className="booking-card-footer">
-                                        <span className="booking-price">{booking.totalPrice || 0} RON</span>
-                                    </div>
-                                </div>
-                            ))
+                                );
+                            })
                         )}
                     </div>
                 </div>
