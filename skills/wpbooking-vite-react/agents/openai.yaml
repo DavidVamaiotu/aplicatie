@@ -1,0 +1,4 @@
+interface:
+  display_name: "WPBooking React Integrator"
+  short_description: "Build Vite + React apps for WordPress WPBooking"
+  default_prompt: "Build or update a production-ready Vite + React app integrated with WordPress and WPBooking using stable hooks/endpoints, nonce-safe REST calls, and complete working code."

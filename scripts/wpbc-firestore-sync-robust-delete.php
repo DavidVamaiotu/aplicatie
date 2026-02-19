@@ -35,6 +35,15 @@ if ( ! defined( 'WPBC_STATUS_SYNC_RETRY_MAX' ) ) {
 if ( ! defined( 'WPBC_STATUS_SYNC_RETRY_BASE_DELAY' ) ) {
 	define( 'WPBC_STATUS_SYNC_RETRY_BASE_DELAY', 20 );
 }
+if ( ! defined( 'WPBC_STATUS_RECONCILE_BATCH_SIZE' ) ) {
+	define( 'WPBC_STATUS_RECONCILE_BATCH_SIZE', 80 );
+}
+if ( ! defined( 'WPBC_STATUS_RECONCILE_LOCK_TTL' ) ) {
+	define( 'WPBC_STATUS_RECONCILE_LOCK_TTL', 240 );
+}
+if ( ! defined( 'WPBC_STATUS_RECONCILE_LOCK_KEY' ) ) {
+	define( 'WPBC_STATUS_RECONCILE_LOCK_KEY', 'wpbc_status_reconcile_lock_v1' );
+}
 // ---------------------------------------------------------------------------
 
 // --- 2. CATEGORY MAPPING ---------------------------------------------------
@@ -89,7 +98,15 @@ add_action( 'wpbc_set_booking_approved', 'wpbc_cat_mark_approved', 10, 2 );
 add_action( 'wpbc_unapprove_booking', 'wpbc_cat_mark_unapproved', 10, 2 );
 add_action( 'wpbc_booking_unapproved', 'wpbc_cat_mark_unapproved', 10, 2 );
 add_action( 'wpbc_set_booking_unapproved', 'wpbc_cat_mark_unapproved', 10, 2 );
+add_action( 'wpbc_set_booking_pending', 'wpbc_cat_mark_unapproved', 10, 2 );
+add_action( 'wpbc_disapprove_booking', 'wpbc_cat_mark_unapproved', 10, 2 );
+add_action( 'wpbc_booking_disapproved', 'wpbc_cat_mark_unapproved', 10, 2 );
+add_action( 'wpbc_set_booking_disapproved', 'wpbc_cat_mark_unapproved', 10, 2 );
 add_action( 'wpbc_retry_sync_order_status', 'wpbc_retry_sync_order_status', 10, 4 );
+add_action( 'wpbc_status_reconcile_tick', 'wpbc_reconcile_recent_booking_statuses' );
+add_action( 'init', 'wpbc_ensure_status_reconcile_schedule' );
+add_filter( 'cron_schedules', 'wpbc_register_five_minute_schedule' );
+register_deactivation_hook( __FILE__, 'wpbc_clear_status_reconcile_schedule' );
 
 // --- 4. ADD / UPDATE / RESTORE --------------------------------------------
 function wpbc_cat_sync_add( $params ) {
@@ -115,6 +132,9 @@ function wpbc_cat_sync_add( $params ) {
 }
 
 function wpbc_cat_sync_restore( $params, $action_result ) {
+	if ( ! wpbc_is_action_result_success( $action_result ) ) {
+		return;
+	}
 	$ids = wpbc_extract_ids( is_array( $params ) ? ( $params['booking_id'] ?? '' ) : '' );
 	foreach ( $ids as $booking_id ) {
 		$details = wpbc_db_lookup( $booking_id );
@@ -132,6 +152,9 @@ function wpbc_cat_sync_restore( $params, $action_result ) {
 }
 
 function wpbc_cat_mark_approved( $raw = null, $action_result = null ) {
+	if ( ! wpbc_is_action_result_success( $action_result ) ) {
+		return;
+	}
 	$ids = wpbc_extract_ids( $raw );
 	foreach ( $ids as $booking_id ) {
 		wpbc_sync_order_and_user_status( $booking_id, 'confirmed', 'approval_hook' );
@@ -139,19 +162,110 @@ function wpbc_cat_mark_approved( $raw = null, $action_result = null ) {
 }
 
 function wpbc_cat_mark_unapproved( $raw = null, $action_result = null ) {
+	if ( ! wpbc_is_action_result_success( $action_result ) ) {
+		return;
+	}
 	$ids = wpbc_extract_ids( $raw );
 	foreach ( $ids as $booking_id ) {
 		wpbc_sync_order_and_user_status( $booking_id, 'pending', 'approval_hook' );
 	}
 }
 
+function wpbc_is_action_result_success( $action_result ) {
+	if ( ! is_array( $action_result ) ) {
+		return true;
+	}
+	if ( ! array_key_exists( 'after_action_result', $action_result ) ) {
+		return true;
+	}
+	return (bool) $action_result['after_action_result'];
+}
+
+function wpbc_register_five_minute_schedule( $schedules ) {
+	if ( ! isset( $schedules['every_5_minutes'] ) ) {
+		$schedules['every_5_minutes'] = array(
+			'interval' => 5 * MINUTE_IN_SECONDS,
+			'display'  => 'Every 5 Minutes',
+		);
+	}
+	return $schedules;
+}
+
+function wpbc_ensure_status_reconcile_schedule() {
+	if ( wp_next_scheduled( 'wpbc_status_reconcile_tick' ) ) {
+		return;
+	}
+	wp_schedule_event( time() + 60, 'every_5_minutes', 'wpbc_status_reconcile_tick' );
+}
+
+function wpbc_clear_status_reconcile_schedule() {
+	$timestamp = wp_next_scheduled( 'wpbc_status_reconcile_tick' );
+	while ( $timestamp ) {
+		wp_unschedule_event( $timestamp, 'wpbc_status_reconcile_tick' );
+		$timestamp = wp_next_scheduled( 'wpbc_status_reconcile_tick' );
+	}
+}
+
+function wpbc_reconcile_recent_booking_statuses() {
+	global $wpdb;
+
+	$lock_key = (string) WPBC_STATUS_RECONCILE_LOCK_KEY;
+	if ( get_transient( $lock_key ) ) {
+		return;
+	}
+	set_transient( $lock_key, 1, max( 30, (int) WPBC_STATUS_RECONCILE_LOCK_TTL ) );
+
+	$limit = max( 20, (int) WPBC_STATUS_RECONCILE_BATCH_SIZE );
+	$table = $wpdb->prefix . 'booking';
+	$rows = $wpdb->get_results(
+		$wpdb->prepare(
+			"SELECT * FROM {$table} ORDER BY booking_id DESC LIMIT %d",
+			$limit
+		),
+		ARRAY_A
+	);
+	if ( ! is_array( $rows ) || empty( $rows ) ) {
+		delete_transient( $lock_key );
+		return;
+	}
+
+	foreach ( $rows as $row ) {
+		$booking_id = isset( $row['booking_id'] ) ? (int) $row['booking_id'] : 0;
+		if ( $booking_id <= 0 ) {
+			continue;
+		}
+		$resource_id = isset( $row['booking_type'] ) ? (int) $row['booking_type'] : 0;
+		if ( $resource_id > 0 && ! wpbc_lookup_category( $resource_id ) ) {
+			continue;
+		}
+
+		$approval_raw = null;
+		if ( array_key_exists( 'approved', $row ) ) {
+			$approval_raw = $row['approved'];
+		} elseif ( array_key_exists( 'is_new', $row ) ) {
+			$approval_raw = ( (int) $row['is_new'] > 0 ) ? 0 : 1;
+		}
+
+		$approval = wpbc_normalize_approval_status( $approval_raw );
+		wpbc_sync_order_and_user_status( $booking_id, $approval, 'periodic_reconcile' );
+	}
+
+	delete_transient( $lock_key );
+}
+
 // --- 5. DELETE / TRASH -----------------------------------------------------
 function wpbc_cat_delete( $params, $action_result ) {
+	if ( ! wpbc_is_action_result_success( $action_result ) ) {
+		return;
+	}
 	$ids = wpbc_extract_ids( is_array( $params ) ? ( $params['booking_id'] ?? '' ) : '' );
 	wpbc_process_delete_list( $ids, 'delete_completely' );
 }
 
 function wpbc_cat_move_to_trash( $params, $action_result ) {
+	if ( ! wpbc_is_action_result_success( $action_result ) ) {
+		return;
+	}
 	$ids = wpbc_extract_ids( is_array( $params ) ? ( $params['booking_id'] ?? '' ) : '' );
 	wpbc_process_delete_list( $ids, 'move_to_trash' );
 }
@@ -344,6 +458,9 @@ function wpbc_sync_order_and_user_status( $booking_id, $approval, $sync_source =
 
 	$order = wpbc_firestore_get_order( $booking_id, $access_token );
 	if ( ! is_array( $order ) ) {
+		if ( 'periodic_reconcile' === (string) $sync_source ) {
+			return false;
+		}
 		wpbc_schedule_status_retry( $booking_id, $approval, $sync_source, (int) $attempt + 1 );
 		return false;
 	}
