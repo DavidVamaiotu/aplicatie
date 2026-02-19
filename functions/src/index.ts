@@ -1043,6 +1043,8 @@ export const createBookingAndReserve = onCall(
                     holdStatus === "pending" &&
                     !!holdExpires &&
                     holdExpires.toMillis() > Date.now();
+                let activeHolds: Record<string, { start: string; end: string; expiresAt: admin.firestore.Timestamp }> | null = null;
+                let alreadyBookedBySameId = false;
 
                 if (unitRef) {
                     const unitSnapTx = await transaction.get(unitRef);
@@ -1052,9 +1054,9 @@ export const createBookingAndReserve = onCall(
 
                     const unitDataTx = unitSnapTx.data() || {};
                     finalUnitName = typeof unitDataTx.name === "string" ? unitDataTx.name : unitId;
-                    const activeHolds = getActiveUnitHolds(unitDataTx.holds, Date.now());
+                    activeHolds = getActiveUnitHolds(unitDataTx.holds, Date.now());
                     const bookings = unitDataTx.bookings;
-                    const alreadyBookedBySameId = hasBookingWithId(bookings, bookingId);
+                    alreadyBookedBySameId = hasBookingWithId(bookings, bookingId);
 
                     if (!alreadyBookedBySameId && !holdIsActive) {
                         throw new HttpsError("failed-precondition", "Booking hold is no longer active.");
@@ -1072,23 +1074,32 @@ export const createBookingAndReserve = onCall(
                     if (activeHolds[holdId]) {
                         delete activeHolds[holdId];
                     }
-
-                    transaction.update(unitRef, {
-                        holds: activeHolds,
-                        ...(alreadyBookedBySameId
-                            ? {}
-                            : {
-                                bookings: admin.firestore.FieldValue.arrayUnion({
-                                    id: bookingId,
-                                    start: startDateStr,
-                                    end: endDateStr,
-                                }),
-                            }),
-                    });
                 }
 
                 const orderRef = db.collection("orders").doc(bookingId);
                 const existingOrderSnap = await transaction.get(orderRef);
+                let userPrivateRef: admin.firestore.DocumentReference | null = null;
+                let privateSnap: admin.firestore.DocumentSnapshot | null = null;
+
+                if (ownerUid && !existingOrderSnap.exists) {
+                    userPrivateRef = db.collection("users_private").doc(ownerUid);
+                    privateSnap = await transaction.get(userPrivateRef);
+                }
+
+                if (unitRef && activeHolds) {
+                    if (alreadyBookedBySameId) {
+                        transaction.update(unitRef, { holds: activeHolds });
+                    } else {
+                        transaction.update(unitRef, {
+                            holds: activeHolds,
+                            bookings: admin.firestore.FieldValue.arrayUnion({
+                                id: bookingId,
+                                start: startDateStr,
+                                end: endDateStr,
+                            }),
+                        });
+                    }
+                }
 
                 if (existingOrderSnap.exists) {
                     const existing = existingOrderSnap.data() || {};
@@ -1170,21 +1181,20 @@ export const createBookingAndReserve = onCall(
                         createdAt: createdAtIso,
                     });
 
-                    const userPrivateRef = db.collection("users_private").doc(ownerUid);
-                    const privateSnap = await transaction.get(userPrivateRef);
-
                     const privateUpdate: Record<string, unknown> = {
                         orderCount: admin.firestore.FieldValue.increment(1),
                         lastOrderDate: admin.firestore.FieldValue.serverTimestamp(),
                         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
                     };
 
-                    if (!privateSnap.exists) {
+                    if (!privateSnap || !privateSnap.exists) {
                         privateUpdate.accountCreatedAt = admin.firestore.FieldValue.serverTimestamp();
                         privateUpdate.createdAt = admin.firestore.FieldValue.serverTimestamp();
                     }
 
-                    transaction.set(userPrivateRef, privateUpdate, { merge: true });
+                    if (userPrivateRef) {
+                        transaction.set(userPrivateRef, privateUpdate, { merge: true });
+                    }
                 }
 
                 transaction.delete(holdRef);
