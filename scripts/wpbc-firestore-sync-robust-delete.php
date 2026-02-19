@@ -135,6 +135,9 @@ function wpbc_cat_sync_restore( $params, $action_result ) {
 	if ( ! wpbc_is_action_result_success( $action_result ) ) {
 		return;
 	}
+	$approval_from_action = is_array( $params )
+		? wpbc_normalize_approval_status( $params['approved'] ?? null )
+		: null;
 	$ids = wpbc_extract_ids( is_array( $params ) ? ( $params['booking_id'] ?? '' ) : '' );
 	foreach ( $ids as $booking_id ) {
 		$details = wpbc_db_lookup( $booking_id );
@@ -143,11 +146,11 @@ function wpbc_cat_sync_restore( $params, $action_result ) {
 			if ( $category_id ) {
 				wpbc_firestore_push( $booking_id, $category_id, (string) $details['resource_id'], $details['dates'] );
 			}
-			$approval = null !== $details['approved'] ? $details['approved'] : 'pending';
+			$approval = null !== $approval_from_action ? $approval_from_action : null;
 			wpbc_sync_order_and_user_status( $booking_id, $approval, 'restore' );
 			continue;
 		}
-		wpbc_sync_order_and_user_status( $booking_id, 'pending', 'restore' );
+		wpbc_sync_order_and_user_status( $booking_id, $approval_from_action, 'restore' );
 	}
 }
 
@@ -286,7 +289,7 @@ function wpbc_cat_legacy_trash( $id, $is_trash ) {
 		if ( $category_id ) {
 			wpbc_firestore_push( (int) $id, $category_id, (string) $details['resource_id'], $details['dates'] );
 		}
-		wpbc_sync_order_and_user_status( (int) $id, $details['approved'], 'legacy_restore' );
+		wpbc_sync_order_and_user_status( (int) $id, null, 'legacy_restore' );
 	}
 }
 
@@ -364,26 +367,26 @@ function wpbc_apply_user_delete_policy( $booking_id, $approval, $order, $access_
 		$existing_status = strtolower( trim( (string) ( $decoded['status'] ?? '' ) ) );
 		if ( in_array( $existing_status, array( 'pending', 'awaiting_approval', 'unapproved', 'in asteptare' ), true ) ) {
 			$effective_approval = 'pending';
-		} elseif ( in_array( $existing_status, array( 'confirmed', 'approved' ), true ) ) {
-			$effective_approval = 'confirmed';
 		}
 	}
 
-	if ( 'pending' === $effective_approval ) {
+	// Strict rule: keep as "cancelled/anulat" ONLY when delete happened for an explicitly confirmed booking.
+	// If approval is pending or unknown at delete time, remove it from user reservations.
+	if ( 'confirmed' !== $effective_approval ) {
 		if ( is_array( $user_doc ) ) {
 			wpbc_firestore_delete_document( $user_doc_path, $access_token );
 		}
 		return;
 	}
 
-	// Approved or unknown: preserve history, mark as cancelled.
+	// Confirmed booking delete: preserve history and mark as cancelled.
 	if ( ! is_array( $user_doc ) ) {
 		return;
 	}
 
 	$current_status = strtolower( trim( (string) ( $decoded['status'] ?? '' ) ) );
 	$current_wp_approval = strtolower( trim( (string) ( $decoded['wpApproval'] ?? '' ) ) );
-	$target_wp_approval = $effective_approval ? $effective_approval : 'unknown';
+	$target_wp_approval = 'confirmed';
 
 	if ( 'cancelled' === $current_status && $current_wp_approval === $target_wp_approval ) {
 		return;
@@ -466,8 +469,12 @@ function wpbc_sync_order_and_user_status( $booking_id, $approval, $sync_source =
 	}
 
 	$normalized_approval = wpbc_normalize_approval_status( $approval );
-	if ( null === $normalized_approval ) {
-		$normalized_approval = wpbc_normalize_approval_status( $order['wpApproval'] ?? null );
+	$order_known_approval = wpbc_normalize_approval_status( $order['wpApproval'] ?? null );
+	if ( 'periodic_reconcile' === (string) $sync_source && null !== $order_known_approval ) {
+		// During periodic reconcile, never overwrite an already known canonical approval.
+		$normalized_approval = $order_known_approval;
+	} elseif ( null === $normalized_approval ) {
+		$normalized_approval = $order_known_approval;
 	}
 	if ( null === $normalized_approval ) {
 		$normalized_approval = 'pending';
