@@ -29,6 +29,12 @@ if ( ! defined( 'WPBC_FIREBASE_ALLOW_INSECURE_KEY_PATH' ) ) {
 if ( ! defined( 'WPBC_FIREBASE_DEBUG_LOGS' ) ) {
 	define( 'WPBC_FIREBASE_DEBUG_LOGS', false );
 }
+if ( ! defined( 'WPBC_STATUS_SYNC_RETRY_MAX' ) ) {
+	define( 'WPBC_STATUS_SYNC_RETRY_MAX', 6 );
+}
+if ( ! defined( 'WPBC_STATUS_SYNC_RETRY_BASE_DELAY' ) ) {
+	define( 'WPBC_STATUS_SYNC_RETRY_BASE_DELAY', 20 );
+}
 // ---------------------------------------------------------------------------
 
 // --- 2. CATEGORY MAPPING ---------------------------------------------------
@@ -83,6 +89,7 @@ add_action( 'wpbc_set_booking_approved', 'wpbc_cat_mark_approved', 10, 2 );
 add_action( 'wpbc_unapprove_booking', 'wpbc_cat_mark_unapproved', 10, 2 );
 add_action( 'wpbc_booking_unapproved', 'wpbc_cat_mark_unapproved', 10, 2 );
 add_action( 'wpbc_set_booking_unapproved', 'wpbc_cat_mark_unapproved', 10, 2 );
+add_action( 'wpbc_retry_sync_order_status', 'wpbc_retry_sync_order_status', 10, 4 );
 
 // --- 4. ADD / UPDATE / RESTORE --------------------------------------------
 function wpbc_cat_sync_add( $params ) {
@@ -95,6 +102,9 @@ function wpbc_cat_sync_add( $params ) {
 	$resource_id = $details ? (int) $details['resource_id'] : (int) ( $params['resource_id'] ?? 0 );
 	$dates = $details ? (string) $details['dates'] : (string) ( $params['str_dates__dd_mm_yyyy'] ?? '' );
 	$approval = $details ? $details['approved'] : wpbc_normalize_approval_status( $params['approved'] ?? null );
+	if ( null === $approval ) {
+		$approval = 'pending';
+	}
 
 	$category_id = wpbc_lookup_category( $resource_id );
 	if ( $category_id && '' !== trim( $dates ) ) {
@@ -113,10 +123,11 @@ function wpbc_cat_sync_restore( $params, $action_result ) {
 			if ( $category_id ) {
 				wpbc_firestore_push( $booking_id, $category_id, (string) $details['resource_id'], $details['dates'] );
 			}
-			wpbc_sync_order_and_user_status( $booking_id, $details['approved'], 'restore' );
+			$approval = null !== $details['approved'] ? $details['approved'] : 'pending';
+			wpbc_sync_order_and_user_status( $booking_id, $approval, 'restore' );
 			continue;
 		}
-		wpbc_sync_order_and_user_status( $booking_id, null, 'restore' );
+		wpbc_sync_order_and_user_status( $booking_id, 'pending', 'restore' );
 	}
 }
 
@@ -232,8 +243,19 @@ function wpbc_apply_user_delete_policy( $booking_id, $approval, $order, $access_
 
 	$user_doc_path = 'users/' . $owner_uid . '/bookings/' . $booking_id;
 	$user_doc = wpbc_firestore_get_document( $user_doc_path, $access_token );
+	$decoded = is_array( $user_doc ) ? wpbc_firestore_decode_fields( $user_doc ) : array();
+	$effective_approval = wpbc_normalize_approval_status( $approval );
 
-	if ( 'pending' === $approval ) {
+	if ( null === $effective_approval && ! empty( $decoded ) ) {
+		$existing_status = strtolower( trim( (string) ( $decoded['status'] ?? '' ) ) );
+		if ( in_array( $existing_status, array( 'pending', 'awaiting_approval', 'unapproved', 'in asteptare' ), true ) ) {
+			$effective_approval = 'pending';
+		} elseif ( in_array( $existing_status, array( 'confirmed', 'approved' ), true ) ) {
+			$effective_approval = 'confirmed';
+		}
+	}
+
+	if ( 'pending' === $effective_approval ) {
 		if ( is_array( $user_doc ) ) {
 			wpbc_firestore_delete_document( $user_doc_path, $access_token );
 		}
@@ -245,10 +267,9 @@ function wpbc_apply_user_delete_policy( $booking_id, $approval, $order, $access_
 		return;
 	}
 
-	$decoded = wpbc_firestore_decode_fields( $user_doc );
 	$current_status = strtolower( trim( (string) ( $decoded['status'] ?? '' ) ) );
 	$current_wp_approval = strtolower( trim( (string) ( $decoded['wpApproval'] ?? '' ) ) );
-	$target_wp_approval = $approval ? $approval : 'unknown';
+	$target_wp_approval = $effective_approval ? $effective_approval : 'unknown';
 
 	if ( 'cancelled' === $current_status && $current_wp_approval === $target_wp_approval ) {
 		return;
@@ -310,20 +331,21 @@ function wpbc_sync_order_delete_metadata( $booking_id, $approval, $order, $acces
 }
 
 // --- 6. ORDER/USER STATUS SYNC --------------------------------------------
-function wpbc_sync_order_and_user_status( $booking_id, $approval, $sync_source = 'sync' ) {
+function wpbc_sync_order_and_user_status( $booking_id, $approval, $sync_source = 'sync', $attempt = 0 ) {
 	$booking_id = (int) $booking_id;
 	if ( $booking_id <= 0 ) {
-		return;
+		return false;
 	}
 
 	$access_token = wpbc_get_token();
 	if ( ! $access_token ) {
-		return;
+		return false;
 	}
 
 	$order = wpbc_firestore_get_order( $booking_id, $access_token );
 	if ( ! is_array( $order ) ) {
-		return;
+		wpbc_schedule_status_retry( $booking_id, $approval, $sync_source, (int) $attempt + 1 );
+		return false;
 	}
 
 	$normalized_approval = wpbc_normalize_approval_status( $approval );
@@ -331,10 +353,12 @@ function wpbc_sync_order_and_user_status( $booking_id, $approval, $sync_source =
 		$normalized_approval = wpbc_normalize_approval_status( $order['wpApproval'] ?? null );
 	}
 	if ( null === $normalized_approval ) {
-		return;
+		$normalized_approval = 'pending';
 	}
 
 	$current_wp_approval = strtolower( trim( (string) ( $order['wpApproval'] ?? '' ) ) );
+	$current_status = strtolower( trim( (string) ( $order['status'] ?? '' ) ) );
+	$target_status = ( 'confirmed' === $normalized_approval ) ? 'confirmed' : 'pending';
 	$patch_order = array(
 		'wpApproval'      => $normalized_approval,
 		'wpSyncUpdatedAt' => gmdate( 'c' ),
@@ -342,10 +366,8 @@ function wpbc_sync_order_and_user_status( $booking_id, $approval, $sync_source =
 	);
 	$mask = array( 'wpApproval', 'wpSyncUpdatedAt', 'wpSyncSource' );
 
-	// If order had been cancelled but is now restored/re-approved, reopen status.
-	$current_status = strtolower( trim( (string) ( $order['status'] ?? '' ) ) );
-	if ( 'cancelled' === $current_status && ( 'restore' === $sync_source || 'legacy_restore' === $sync_source || 'approval_hook' === $sync_source ) ) {
-		$patch_order['status'] = ( 'confirmed' === $normalized_approval ) ? 'confirmed' : 'pending';
+	if ( $current_status !== $target_status ) {
+		$patch_order['status'] = $target_status;
 		$mask[] = 'status';
 	}
 
@@ -355,11 +377,36 @@ function wpbc_sync_order_and_user_status( $booking_id, $approval, $sync_source =
 
 	$owner_uid = isset( $order['ownerUid'] ) ? trim( (string) $order['ownerUid'] ) : '';
 	if ( '' === $owner_uid ) {
-		return;
+		return true;
 	}
 
 	$user_status = ( 'confirmed' === $normalized_approval ) ? 'confirmed' : 'pending';
 	wpbc_upsert_user_booking_status( $booking_id, $owner_uid, $order, $user_status, $normalized_approval, $sync_source, $access_token );
+	return true;
+}
+
+function wpbc_schedule_status_retry( $booking_id, $approval, $sync_source, $attempt ) {
+	$attempt = (int) $attempt;
+	if ( $attempt <= 0 ) {
+		$attempt = 1;
+	}
+	if ( $attempt > (int) WPBC_STATUS_SYNC_RETRY_MAX ) {
+		wpbc_log( 'Status sync retry limit reached for booking #' . (int) $booking_id );
+		return;
+	}
+
+	$approval_value = is_null( $approval ) ? '' : (string) $approval;
+	$args = array( (int) $booking_id, $approval_value, (string) $sync_source, $attempt );
+	if ( wp_next_scheduled( 'wpbc_retry_sync_order_status', $args ) ) {
+		return;
+	}
+
+	$delay = min( 300, (int) WPBC_STATUS_SYNC_RETRY_BASE_DELAY * $attempt );
+	wp_schedule_single_event( time() + $delay, 'wpbc_retry_sync_order_status', $args );
+}
+
+function wpbc_retry_sync_order_status( $booking_id, $approval, $sync_source = 'retry', $attempt = 1 ) {
+	wpbc_sync_order_and_user_status( (int) $booking_id, $approval, (string) $sync_source, (int) $attempt );
 }
 
 function wpbc_upsert_user_booking_status( $booking_id, $owner_uid, $order, $user_status, $approval_status, $sync_source, $access_token ) {
@@ -957,7 +1004,7 @@ function wpbc_extract_ids( $raw ) {
 		return array();
 	}
 
-	$parts = preg_split( '/\s*,\s*/', $raw );
+	$parts = preg_split( '/[[:space:]]*,[[:space:]]*/', $raw );
 	$ids = array();
 	foreach ( $parts as $part ) {
 		if ( is_numeric( $part ) ) {
@@ -1081,8 +1128,13 @@ function wpbc_get_validated_key_path() {
 	if ( ! WPBC_FIREBASE_ALLOW_INSECURE_KEY_PATH ) {
 		$plugin_dir = realpath( WP_PLUGIN_DIR );
 		if ( $plugin_dir && 0 === strpos( $real, $plugin_dir ) ) {
-			wpbc_log( 'Refusing insecure key path inside plugin directory.' );
-			return false;
+			$default_plugin_key = realpath( __DIR__ . '/index.json' );
+			$is_default_plugin_key = $default_plugin_key && $real === $default_plugin_key;
+			if ( ! $is_default_plugin_key ) {
+				wpbc_log( 'Refusing insecure key path inside plugin directory.' );
+				return false;
+			}
+			wpbc_log( 'Using default plugin key path. Move key outside web roots and set WPBC_FIREBASE_KEY_PATH for stronger security.' );
 		}
 	}
 
@@ -1099,4 +1151,3 @@ function wpbc_log( $message ) {
 		error_log( '[WPBC Firestore Sync] ' . (string) $message );
 	}
 }
-

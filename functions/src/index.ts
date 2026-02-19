@@ -14,6 +14,7 @@ const RATE_LIMIT_MAX_ATTEMPTS = 10;
 const RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000;
 const RATE_LIMIT_ROOM_MAX_ATTEMPTS = 5;
 const HOLD_TTL_MS = 5 * 60 * 1000;
+const TERMINAL_HOLD_RETENTION_MS = 24 * 60 * 60 * 1000;
 const CAPTCHA_VERIFY_URL = "https://www.google.com/recaptcha/api/siteverify";
 const SYNC_RETRY_LIMIT = 10;
 const BOOKING_PROVIDER_HMAC_SECRET = defineSecret("BOOKING_PROVIDER_HMAC_SECRET");
@@ -635,7 +636,8 @@ async function releaseBookingHold(
     roomRef: admin.firestore.DocumentReference | null,
     unitId: string | null,
     reason: string,
-    status: "failed" | "expired" = "failed"
+    status: "failed" | "expired" = "failed",
+    failureDetails?: string
 ): Promise<void> {
     await db.runTransaction(async (transaction) => {
         if (roomRef && unitId) {
@@ -658,6 +660,9 @@ async function releaseBookingHold(
         };
         if (status === "failed") {
             patch.failedAt = admin.firestore.FieldValue.serverTimestamp();
+            if (failureDetails) {
+                patch.failureDetails = failureDetails;
+            }
         }
         if (status === "expired") {
             patch.expiredAt = admin.firestore.FieldValue.serverTimestamp();
@@ -721,7 +726,7 @@ async function writePendingSyncOrder(params: {
             email: params.email,
             phone: params.phone,
         },
-        status: "external_confirmed_pending_sync",
+        status: "pending",
         syncStatus: "pending_local_sync",
         syncRetryCount: 0,
         lastSyncError: params.lastSyncError,
@@ -816,7 +821,7 @@ async function reconcilePendingOrder(orderRef: admin.firestore.DocumentReference
                     children: Number(guests.children || 0),
                 },
                 totalPrice: Number(order.totalPrice || 0),
-                status: "confirmed",
+                status: "pending",
                 createdAt: new Date().toISOString(),
             }, { merge: true });
 
@@ -831,7 +836,7 @@ async function reconcilePendingOrder(orderRef: admin.firestore.DocumentReference
         }
 
         transaction.set(orderRef, {
-            status: "confirmed",
+            status: "pending",
             syncStatus: "synced",
             syncedAt: admin.firestore.FieldValue.serverTimestamp(),
             lastSyncError: admin.firestore.FieldValue.delete(),
@@ -1030,18 +1035,14 @@ export const createBookingAndReserve = onCall(
                 let finalUnitName = initialUnitName;
 
                 const holdSnap = await transaction.get(holdRef);
-                if (!holdSnap.exists) {
-                    throw new HttpsError("failed-precondition", "Booking hold was not found.");
-                }
                 const holdData = holdSnap.data() || {};
-                const holdStatus = String(holdData.status || "");
+                const holdStatus = holdSnap.exists ? String(holdData.status || "") : "";
                 const holdExpires = holdData.expiresAt as admin.firestore.Timestamp | undefined;
-                if (holdStatus !== "pending") {
-                    throw new HttpsError("failed-precondition", "Booking hold is no longer active.");
-                }
-                if (!holdExpires || holdExpires.toMillis() <= Date.now()) {
-                    throw new HttpsError("failed-precondition", "Booking hold expired.");
-                }
+                const holdIsActive =
+                    holdSnap.exists &&
+                    holdStatus === "pending" &&
+                    !!holdExpires &&
+                    holdExpires.toMillis() > Date.now();
 
                 if (unitRef) {
                     const unitSnapTx = await transaction.get(unitRef);
@@ -1052,25 +1053,37 @@ export const createBookingAndReserve = onCall(
                     const unitDataTx = unitSnapTx.data() || {};
                     finalUnitName = typeof unitDataTx.name === "string" ? unitDataTx.name : unitId;
                     const activeHolds = getActiveUnitHolds(unitDataTx.holds, Date.now());
+                    const bookings = unitDataTx.bookings;
+                    const alreadyBookedBySameId = hasBookingWithId(bookings, bookingId);
 
-                    if (hasBookingOverlap(unitDataTx.bookings, startDate, endDate)) {
+                    if (!alreadyBookedBySameId && !holdIsActive) {
+                        throw new HttpsError("failed-precondition", "Booking hold is no longer active.");
+                    }
+                    if (!alreadyBookedBySameId && hasBookingOverlap(bookings, startDate, endDate)) {
                         throw new HttpsError("failed-precondition", "Selected dates are no longer available.");
                     }
-                    if (!activeHolds[holdId]) {
+                    if (holdIsActive && !activeHolds[holdId] && !alreadyBookedBySameId) {
                         throw new HttpsError("failed-precondition", "Booking hold is missing.");
                     }
-                    if (hasHoldOverlap(activeHolds, startDate, endDate, holdId)) {
+                    if (holdIsActive && !alreadyBookedBySameId && hasHoldOverlap(activeHolds, startDate, endDate, holdId)) {
                         throw new HttpsError("failed-precondition", "Selected dates are temporarily reserved.");
                     }
 
-                    delete activeHolds[holdId];
+                    if (activeHolds[holdId]) {
+                        delete activeHolds[holdId];
+                    }
+
                     transaction.update(unitRef, {
                         holds: activeHolds,
-                        bookings: admin.firestore.FieldValue.arrayUnion({
-                            id: bookingId,
-                            start: startDateStr,
-                            end: endDateStr,
-                        }),
+                        ...(alreadyBookedBySameId
+                            ? {}
+                            : {
+                                bookings: admin.firestore.FieldValue.arrayUnion({
+                                    id: bookingId,
+                                    start: startDateStr,
+                                    end: endDateStr,
+                                }),
+                            }),
                     });
                 }
 
@@ -1082,12 +1095,7 @@ export const createBookingAndReserve = onCall(
                     const existingSyncStatus = String(existing.syncStatus || "").toLowerCase() === "pending_local_sync"
                         ? "pending_local_sync"
                         : "synced";
-                    transaction.set(holdRef, {
-                        status: "confirmed",
-                        bookingId,
-                        finalizedAt: admin.firestore.FieldValue.serverTimestamp(),
-                        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-                    }, { merge: true });
+                    transaction.delete(holdRef);
 
                     return {
                         bookingId,
@@ -1127,7 +1135,7 @@ export const createBookingAndReserve = onCall(
                         email,
                         phone,
                     },
-                    status: "confirmed",
+                    status: "pending",
                     syncStatus: "synced",
                     pricePerNight,
                     nights,
@@ -1158,7 +1166,7 @@ export const createBookingAndReserve = onCall(
                             children,
                         },
                         totalPrice,
-                        status: "confirmed",
+                        status: "pending",
                         createdAt: createdAtIso,
                     });
 
@@ -1179,12 +1187,7 @@ export const createBookingAndReserve = onCall(
                     transaction.set(userPrivateRef, privateUpdate, { merge: true });
                 }
 
-                transaction.set(holdRef, {
-                    status: "confirmed",
-                    bookingId,
-                    finalizedAt: admin.firestore.FieldValue.serverTimestamp(),
-                    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-                }, { merge: true });
+                transaction.delete(holdRef);
 
                 return {
                     bookingId,
@@ -1203,7 +1206,15 @@ export const createBookingAndReserve = onCall(
             });
         } catch (error) {
             const localSyncError = normalizeErrorMessage(error);
-            await releaseBookingHold(holdRef, holdId, roomRef, bookingType === "room" ? unitId : null, "finalization_failed");
+            await releaseBookingHold(
+                holdRef,
+                holdId,
+                roomRef,
+                bookingType === "room" ? unitId : null,
+                "finalization_failed",
+                "failed",
+                localSyncError
+            );
             await writePendingSyncOrder({
                 bookingId,
                 correlationId,
@@ -1240,7 +1251,7 @@ export const createBookingAndReserve = onCall(
                 alreadyExisted: false,
                 syncStatus: "pending_local_sync",
                 correlationId,
-                status: "confirmed",
+                status: "pending",
                 warning: "Booking confirmed with provider. Local sync is pending.",
             };
         }
@@ -1256,7 +1267,7 @@ export const createBookingAndReserve = onCall(
             alreadyExisted: transactionResult.alreadyExisted,
             syncStatus: transactionResult.syncStatus,
             correlationId: transactionResult.correlationId,
-            status: "confirmed",
+            status: "pending",
         };
     }
 );
@@ -1703,7 +1714,7 @@ export const reconcilePendingExternalBookings = onSchedule(
                 await orderDoc.ref.set({
                     syncRetryCount: retries,
                     syncStatus: retries >= SYNC_RETRY_LIMIT ? "failed_manual_review" : "pending_local_sync",
-                    status: retries >= SYNC_RETRY_LIMIT ? "external_confirmed_sync_failed" : "external_confirmed_pending_sync",
+                    status: "pending",
                     lastSyncError: errMessage,
                     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
                 }, { merge: true });
@@ -1711,6 +1722,39 @@ export const reconcilePendingExternalBookings = onSchedule(
         }
 
         console.log(`[reconcilePendingExternalBookings] Reconciled ${reconciled}, failed ${failed}`);
+    }
+);
+
+export const cleanupTerminalBookingHolds = onSchedule(
+    {
+        schedule: "15 * * * *",
+        region: "europe-west1",
+        timeZone: "Europe/Bucharest",
+    },
+    async () => {
+        const cutoff = admin.firestore.Timestamp.fromMillis(Date.now() - TERMINAL_HOLD_RETENTION_MS);
+        const terminalStatuses: Array<"confirmed" | "failed" | "expired"> = ["confirmed", "failed", "expired"];
+        let removed = 0;
+
+        for (const status of terminalStatuses) {
+            const snap = await db
+                .collection("booking_holds")
+                .where("status", "==", status)
+                .where("updatedAt", "<=", cutoff)
+                .limit(200)
+                .get();
+
+            if (snap.empty) continue;
+
+            const batch = db.batch();
+            snap.docs.forEach((doc) => batch.delete(doc.ref));
+            await batch.commit();
+            removed += snap.size;
+        }
+
+        if (removed > 0) {
+            console.log(`[cleanupTerminalBookingHolds] Removed ${removed} terminal hold documents`);
+        }
     }
 );
 
