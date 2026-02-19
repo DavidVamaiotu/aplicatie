@@ -13,8 +13,10 @@ const WORDPRESS_REQUEST_TIMEOUT_MS = 12000;
 const RATE_LIMIT_MAX_ATTEMPTS = 10;
 const RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000;
 const RATE_LIMIT_ROOM_MAX_ATTEMPTS = 5;
+const RATE_LIMIT_RETENTION_MS = 24 * 60 * 60 * 1000;
 const HOLD_TTL_MS = 5 * 60 * 1000;
 const TERMINAL_HOLD_RETENTION_MS = 24 * 60 * 60 * 1000;
+const HOLD_FAILURE_DETAILS_MAX_LEN = 512;
 const CAPTCHA_VERIFY_URL = "https://www.google.com/recaptcha/api/siteverify";
 const SYNC_RETRY_LIMIT = 10;
 const BOOKING_PROVIDER_HMAC_SECRET = defineSecret("BOOKING_PROVIDER_HMAC_SECRET");
@@ -514,6 +516,9 @@ async function enforceBookingRateLimit(specs: RateLimitSpec[]): Promise<void> {
                 {
                     windowStart: admin.firestore.Timestamp.fromMillis(windowStartMs),
                     count: count + 1,
+                    expiresAt: admin.firestore.Timestamp.fromMillis(
+                        windowStartMs + spec.windowMs + RATE_LIMIT_RETENTION_MS
+                    ),
                     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
                 },
                 { merge: true }
@@ -661,7 +666,7 @@ async function releaseBookingHold(
         if (status === "failed") {
             patch.failedAt = admin.firestore.FieldValue.serverTimestamp();
             if (failureDetails) {
-                patch.failureDetails = failureDetails;
+                patch.failureDetails = String(failureDetails).trim().slice(0, HOLD_FAILURE_DETAILS_MAX_LEN);
             }
         }
         if (status === "expired") {
@@ -689,15 +694,10 @@ async function writePendingSyncOrder(params: {
     resourceId: number;
     roomTitle: string;
     unitName: string | null;
-    dates: string[];
     startDateStr: string;
     endDateStr: string;
     adults: number;
     children: number;
-    name: string;
-    lastName: string;
-    email: string;
-    phone: string;
     pricePerNight: number;
     nights: number;
     totalPrice: number;
@@ -713,24 +713,20 @@ async function writePendingSyncOrder(params: {
         resourceId: params.resourceId,
         itemTitle: params.roomTitle,
         unitName: params.unitName,
-        dates: params.dates,
         startDate: params.startDateStr,
         endDate: params.endDateStr,
         guests: {
             adults: params.adults,
             children: params.children,
         },
-        customer: {
-            name: params.name,
-            lastName: params.lastName,
-            email: params.email,
-            phone: params.phone,
-        },
         status: "pending",
         syncStatus: "pending_local_sync",
+        wpApproval: "pending",
+        wpSyncUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
         syncRetryCount: 0,
         lastSyncError: params.lastSyncError,
         correlationId: params.correlationId,
+        providerStatus: "created",
         providerConfirmedAt: admin.firestore.FieldValue.serverTimestamp(),
         pricePerNight: params.pricePerNight,
         nights: params.nights,
@@ -757,6 +753,17 @@ async function reconcilePendingOrder(orderRef: admin.firestore.DocumentReference
         const startDateStr = String(order.startDate || "");
         const endDateStr = String(order.endDate || "");
         const ownerUid = typeof order.ownerUid === "string" && order.ownerUid ? order.ownerUid : null;
+        const normalizedApproval = String(order.wpApproval || "").toLowerCase() === "confirmed"
+            ? "confirmed"
+            : "pending";
+        const normalizedStatus = String(order.status || "").toLowerCase() === "confirmed"
+            ? "confirmed"
+            : "pending";
+        const orderCreatedAt = order.createdAt instanceof admin.firestore.Timestamp
+            ? order.createdAt.toDate().toISOString()
+            : (typeof order.createdAt === "string" && order.createdAt.trim()
+                ? order.createdAt
+                : new Date().toISOString());
 
         if (!bookingId || !Number.isFinite(roomId) || !startDateStr || !endDateStr) {
             transaction.set(orderRef, {
@@ -807,7 +814,6 @@ async function reconcilePendingOrder(orderRef: admin.firestore.DocumentReference
         }
 
         if (ownerUid) {
-            const guests = (order.guests || {}) as { adults?: unknown; children?: unknown };
             const userBookingRef = db.collection("users").doc(ownerUid).collection("bookings").doc(bookingId);
             const userBookingSnap = await transaction.get(userBookingRef);
             transaction.set(userBookingRef, {
@@ -816,13 +822,11 @@ async function reconcilePendingOrder(orderRef: admin.firestore.DocumentReference
                 unitName: typeof order.unitName === "string" ? order.unitName : null,
                 dates: `${startDateStr} - ${endDateStr}`,
                 nights: Number(order.nights || 0),
-                guests: {
-                    adults: Number(guests.adults || 0),
-                    children: Number(guests.children || 0),
-                },
                 totalPrice: Number(order.totalPrice || 0),
-                status: "pending",
-                createdAt: new Date().toISOString(),
+                status: normalizedStatus,
+                wpApproval: normalizedApproval,
+                createdAt: orderCreatedAt,
+                updatedAt: new Date().toISOString(),
             }, { merge: true });
 
             if (!userBookingSnap.exists) {
@@ -836,7 +840,9 @@ async function reconcilePendingOrder(orderRef: admin.firestore.DocumentReference
         }
 
         transaction.set(orderRef, {
-            status: "pending",
+            status: normalizedStatus,
+            wpApproval: normalizedApproval,
+            wpSyncUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
             syncStatus: "synced",
             syncedAt: admin.firestore.FieldValue.serverTimestamp(),
             lastSyncError: admin.firestore.FieldValue.delete(),
@@ -1133,27 +1139,21 @@ export const createBookingAndReserve = onCall(
                     resourceId,
                     itemTitle: roomTitle,
                     unitName: finalUnitName,
-                    dates,
                     startDate: startDateStr,
                     endDate: endDateStr,
                     guests: {
                         adults,
                         children,
                     },
-                    customer: {
-                        name,
-                        lastName,
-                        email,
-                        phone,
-                    },
                     status: "pending",
+                    wpApproval: "pending",
+                    wpSyncUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
                     syncStatus: "synced",
                     pricePerNight,
                     nights,
                     totalPrice,
                     correlationId,
                     providerStatus: "created",
-                    providerRaw: providerResult,
                     providerConfirmedAt: admin.firestore.FieldValue.serverTimestamp(),
                     createdAt: admin.firestore.FieldValue.serverTimestamp(),
                     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -1172,13 +1172,11 @@ export const createBookingAndReserve = onCall(
                         unitName: finalUnitName,
                         dates: `${startDateStr} - ${endDateStr}`,
                         nights,
-                        guests: {
-                            adults,
-                            children,
-                        },
                         totalPrice,
                         status: "pending",
+                        wpApproval: "pending",
                         createdAt: createdAtIso,
+                        updatedAt: createdAtIso,
                     });
 
                     const privateUpdate: Record<string, unknown> = {
@@ -1235,15 +1233,10 @@ export const createBookingAndReserve = onCall(
                 resourceId,
                 roomTitle,
                 unitName: initialUnitName,
-                dates,
                 startDateStr,
                 endDateStr,
                 adults,
                 children,
-                name,
-                lastName,
-                email,
-                phone,
                 pricePerNight,
                 nights,
                 totalPrice,
@@ -1732,6 +1725,41 @@ export const reconcilePendingExternalBookings = onSchedule(
         }
 
         console.log(`[reconcilePendingExternalBookings] Reconciled ${reconciled}, failed ${failed}`);
+    }
+);
+
+export const cleanupStaleBookingRateLimits = onSchedule(
+    {
+        schedule: "7 * * * *",
+        region: "europe-west1",
+        timeZone: "Europe/Bucharest",
+    },
+    async () => {
+        const now = admin.firestore.Timestamp.now();
+        const staleByExpiry = await db
+            .collection("booking_rate_limits")
+            .where("expiresAt", "<=", now)
+            .limit(300)
+            .get();
+
+        const oldFallbackCutoff = admin.firestore.Timestamp.fromMillis(Date.now() - 2 * RATE_LIMIT_RETENTION_MS);
+        const staleByUpdatedAt = await db
+            .collection("booking_rate_limits")
+            .where("updatedAt", "<=", oldFallbackCutoff)
+            .limit(300)
+            .get();
+
+        const refs = new Map<string, admin.firestore.DocumentReference>();
+        staleByExpiry.docs.forEach((doc) => refs.set(doc.ref.path, doc.ref));
+        staleByUpdatedAt.docs.forEach((doc) => refs.set(doc.ref.path, doc.ref));
+
+        if (refs.size === 0) return;
+
+        const batch = db.batch();
+        refs.forEach((ref) => batch.delete(ref));
+        await batch.commit();
+
+        console.log(`[cleanupStaleBookingRateLimits] Removed ${refs.size} stale rate limit documents`);
     }
 );
 

@@ -118,7 +118,10 @@ function wpbc_cat_sync_add( $params ) {
 	$details = wpbc_db_lookup( $booking_id );
 	$resource_id = $details ? (int) $details['resource_id'] : (int) ( $params['resource_id'] ?? 0 );
 	$dates = $details ? (string) $details['dates'] : (string) ( $params['str_dates__dd_mm_yyyy'] ?? '' );
-	$approval = $details ? $details['approved'] : wpbc_normalize_approval_status( $params['approved'] ?? null );
+	$approval = wpbc_pick_first_known_approval(
+		$details ? ( $details['approved'] ?? null ) : null,
+		is_array( $params ) ? ( $params['approved'] ?? null ) : null
+	);
 	if ( null === $approval ) {
 		$approval = 'pending';
 	}
@@ -146,11 +149,12 @@ function wpbc_cat_sync_restore( $params, $action_result ) {
 			if ( $category_id ) {
 				wpbc_firestore_push( $booking_id, $category_id, (string) $details['resource_id'], $details['dates'] );
 			}
-			$approval = null !== $approval_from_action ? $approval_from_action : null;
+			$approval = wpbc_pick_first_known_approval( $details['approved'] ?? null, $approval_from_action );
 			wpbc_sync_order_and_user_status( $booking_id, $approval, 'restore' );
 			continue;
 		}
-		wpbc_sync_order_and_user_status( $booking_id, $approval_from_action, 'restore' );
+		$approval = wpbc_pick_first_known_approval( null, $approval_from_action );
+		wpbc_sync_order_and_user_status( $booking_id, $approval, 'restore' );
 	}
 }
 
@@ -182,6 +186,17 @@ function wpbc_is_action_result_success( $action_result ) {
 		return true;
 	}
 	return (bool) $action_result['after_action_result'];
+}
+
+function wpbc_pick_first_known_approval() {
+	$values = func_get_args();
+	foreach ( $values as $value ) {
+		$normalized = wpbc_normalize_approval_status( $value );
+		if ( null !== $normalized ) {
+			return $normalized;
+		}
+	}
+	return null;
 }
 
 function wpbc_register_five_minute_schedule( $schedules ) {
@@ -289,7 +304,7 @@ function wpbc_cat_legacy_trash( $id, $is_trash ) {
 		if ( $category_id ) {
 			wpbc_firestore_push( (int) $id, $category_id, (string) $details['resource_id'], $details['dates'] );
 		}
-		wpbc_sync_order_and_user_status( (int) $id, null, 'legacy_restore' );
+		wpbc_sync_order_and_user_status( (int) $id, $details['approved'] ?? null, 'legacy_restore' );
 	}
 }
 
@@ -470,10 +485,7 @@ function wpbc_sync_order_and_user_status( $booking_id, $approval, $sync_source =
 
 	$normalized_approval = wpbc_normalize_approval_status( $approval );
 	$order_known_approval = wpbc_normalize_approval_status( $order['wpApproval'] ?? null );
-	if ( 'periodic_reconcile' === (string) $sync_source && null !== $order_known_approval ) {
-		// During periodic reconcile, never overwrite an already known canonical approval.
-		$normalized_approval = $order_known_approval;
-	} elseif ( null === $normalized_approval ) {
+	if ( null === $normalized_approval ) {
 		$normalized_approval = $order_known_approval;
 	}
 	if ( null === $normalized_approval ) {
@@ -573,9 +585,6 @@ function wpbc_upsert_user_booking_status( $booking_id, $owner_uid, $order, $user
 	}
 	if ( isset( $order['totalPrice'] ) && '' !== (string) $order['totalPrice'] && empty( $existing['totalPrice'] ) ) {
 		$payload['totalPrice'] = (int) $order['totalPrice'];
-	}
-	if ( ! empty( $order['guests'] ) && empty( $existing['guests'] ) ) {
-		$payload['guests'] = $order['guests'];
 	}
 	if ( empty( $existing['createdAt'] ) ) {
 		$payload['createdAt'] = ! empty( $order['createdAt'] ) ? (string) $order['createdAt'] : gmdate( 'c' );

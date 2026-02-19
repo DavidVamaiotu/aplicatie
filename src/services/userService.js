@@ -51,7 +51,25 @@ export const getUserBookings = async (uid) => {
         const bookingsRef = collection(db, 'users', uid, 'bookings');
         const q = query(bookingsRef, orderBy('createdAt', 'desc'));
         const snapshot = await getDocs(q);
-        return snapshot.docs.map((bookingDoc) => ({ id: bookingDoc.id, ...bookingDoc.data() }));
+        return snapshot.docs.map((bookingDoc) => {
+            const data = bookingDoc.data() || {};
+            const startDate = typeof data.startDate === 'string' ? data.startDate : '';
+            const endDate = typeof data.endDate === 'string' ? data.endDate : '';
+            const hasDateRange = startDate && endDate;
+            const dates = typeof data.dates === 'string' && data.dates.trim()
+                ? data.dates
+                : (hasDateRange ? `${startDate} - ${endDate}` : '');
+
+            const wpApproval = String(data.wpApproval || '').toLowerCase();
+            const fallbackStatus = wpApproval === 'confirmed' ? 'confirmed' : 'pending';
+
+            return {
+                id: bookingDoc.id,
+                ...data,
+                dates,
+                status: data.status || fallbackStatus,
+            };
+        });
     } catch (error) {
         console.error('Error fetching user bookings:', error);
         return [];

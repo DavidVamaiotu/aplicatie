@@ -567,6 +567,10 @@ const Account = () => {
                         ) : (
                             bookings.map((booking, index) => {
                                 const normalizedStatus = normalizeBookingStatus(booking.status);
+                                const displayDates = booking.dates
+                                    || ((booking.startDate && booking.endDate)
+                                        ? `${booking.startDate} - ${booking.endDate}`
+                                        : 'N/A');
                                 return (
                                     <div
                                         key={booking.id}
@@ -591,7 +595,7 @@ const Account = () => {
                                             </div>
                                             <div className="booking-detail">
                                                 <Clock size={14} />
-                                                <span>{booking.dates || 'N/A'}</span>
+                                                <span>{displayDates}</span>
                                             </div>
                                         </div>
 

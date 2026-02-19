@@ -15,5 +15,26 @@
             ]
         }
     ],
-    "fieldOverrides": []
+    "fieldOverrides": [
+        {
+            "collectionGroup": "orders",
+            "fieldPath": "lastSyncError",
+            "indexes": []
+        },
+        {
+            "collectionGroup": "orders",
+            "fieldPath": "wpDeleteSource",
+            "indexes": []
+        },
+        {
+            "collectionGroup": "bookings",
+            "fieldPath": "wpSyncSource",
+            "indexes": []
+        },
+        {
+            "collectionGroup": "bookings",
+            "fieldPath": "wpDeleteSource",
+            "indexes": []
+        }
+    ]
 }
