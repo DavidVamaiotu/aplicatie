@@ -1,0 +1,4 @@
+interface:
+  display_name: "Progress MD Memory"
+  short_description: "Persist task progress in a repo progress.md"
+  default_prompt: "Use $progress-md-memory to keep progress.md updated after code changes and re-read it when resuming work."
