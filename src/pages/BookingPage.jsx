@@ -1,9 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { createBooking } from '../services/api';
 import { getBookingCaptchaToken } from '../services/captchaService';
 import { useAuth } from '../context/AuthContext';
 import { auth } from '../firebase';
 import { fetchUserDiscounts, getRoomDiscounts, getBestDiscount } from '../services/discountService';
+import { fetchMonthlyOverrides, buildDayPricesMap, calculateRangeTotal, ensureOverridesForMonths } from '../services/pricingService';
 import { useParams, useNavigate } from 'react-router-dom';
 import { format, addDays, isSameDay, differenceInDays } from 'date-fns';
 import { getItemById } from '../data/rooms';
@@ -58,6 +59,12 @@ const BookingPage = () => {
     const [userDiscounts, setUserDiscounts] = useState([]);
     const [roomDiscounts, setRoomDiscounts] = useState([]);
 
+    // Pricing state
+    const [dayPrices, setDayPrices] = useState(null);           // Map for calendar display
+    const [overridesCache, setOverridesCache] = useState({});    // { "YYYY-MM": overridesObj|null }
+    const [rangeBreakdown, setRangeBreakdown] = useState(null);  // { nights: [...], total }
+    const currentMonthRef = useRef(format(today, 'yyyy-MM'));
+
     // Fetch discounts when user is logged in
     useEffect(() => {
         if (!user?.uid) return;
@@ -92,12 +99,78 @@ const BookingPage = () => {
                 const units = await getUnitsForRoom(data.id);
                 setAllUnits(units);
                 setFullyBookedDates(getUnavailableDatesFromUnits(units));
+
+                // Fetch current month overrides for pricing calendar
+                const monthKey = format(today, 'yyyy-MM');
+                const overrides = await fetchMonthlyOverrides(data.id, monthKey);
+                setOverridesCache(prev => ({ ...prev, [monthKey]: overrides }));
+
+                // Build initial day prices map
+                const pricesMap = buildDayPricesMap(today.getFullYear(), today.getMonth(), data, overrides);
+                setDayPrices(pricesMap);
             }
 
             setFetchingItem(false);
         };
         fetchItem();
     }, [id]);
+
+    // Handle calendar month change — fetch overrides for the new month
+    const handleMonthChange = useCallback(async (month) => {
+        if (!item) return;
+        const monthKey = format(month, 'yyyy-MM');
+        currentMonthRef.current = monthKey;
+
+        let overrides = overridesCache[monthKey];
+        if (overrides === undefined) {
+            overrides = await fetchMonthlyOverrides(item.id, monthKey);
+            setOverridesCache(prev => ({ ...prev, [monthKey]: overrides }));
+        }
+
+        const pricesMap = buildDayPricesMap(month.getFullYear(), month.getMonth(), item, overrides);
+        setDayPrices(pricesMap);
+    }, [item, overridesCache]);
+
+    // Calculate itemized breakdown when range changes
+    useEffect(() => {
+        if (!range?.from || !range?.to || !item) {
+            setRangeBreakdown(null);
+            return;
+        }
+
+        const calculateBreakdown = async () => {
+            // Determine which months the range spans
+            const months = new Set();
+            let cursor = new Date(range.from);
+            const end = new Date(range.to);
+            while (cursor < end) {
+                months.add(format(cursor, 'yyyy-MM'));
+                cursor = addDays(cursor, 1);
+            }
+
+            // Fetch any missing month overrides
+            const missingMonths = [...months].filter(m => overridesCache[m] === undefined);
+            if (missingMonths.length > 0) {
+                const fetched = await ensureOverridesForMonths(item.id, missingMonths);
+                const newCache = { ...overridesCache };
+                fetched.forEach((data, key) => {
+                    newCache[key] = data;
+                });
+                setOverridesCache(newCache);
+            }
+
+            // Build overrides map for calculation using latest cache
+            const overridesMap = new Map();
+            months.forEach(m => {
+                overridesMap.set(m, overridesCache[m] ?? null);
+            });
+
+            const breakdown = calculateRangeTotal(range.from, range.to, item, overridesMap);
+            setRangeBreakdown(breakdown);
+        };
+
+        calculateBreakdown();
+    }, [range?.from, range?.to, item, overridesCache]);
 
     if (fetchingItem) return (
         <div className="min-h-screen flex items-center justify-center bg-gradient-dark">
@@ -141,12 +214,6 @@ const BookingPage = () => {
         let currentDate = new Date(range.from);
         const endDate = new Date(range.to);
 
-        // IMPORTANT: We book DAYS (inclusive of checkout), as per user request.
-        // Loop runs while currentDate <= endDate.
-        // Times are added per API requirements:
-        // - Check-in (first date): 15:00:01 (from 15:00)
-        // - Check-out (last date): 12:00:02 (until 12:00)
-        // - Middle dates: 00:00:00
         let dateIndex = 0;
         const totalDates = Math.ceil((endDate - new Date(range.from)) / (1000 * 60 * 60 * 24)) + 1;
 
@@ -154,13 +221,10 @@ const BookingPage = () => {
             const dateStr = format(currentDate, 'yyyy-MM-dd');
 
             if (dateIndex === 0) {
-                // First date: check-in time 15:00:01
                 dates.push(`${dateStr} 15:00:01`);
             } else if (dateIndex === totalDates - 1) {
-                // Last date: check-out time 12:00:02
                 dates.push(`${dateStr} 12:00:02`);
             } else {
-                // Middle dates: 00:00:00
                 dates.push(`${dateStr} 00:00:00`);
             }
 
@@ -168,13 +232,9 @@ const BookingPage = () => {
             dateIndex++;
         }
 
-
-
         setLoading(true);
 
         try {
-            // Format dates as array of strings YYYY-MM-DD
-            // Dates array is already prepared above for validation
             const guestCaptchaToken = isAuthenticated ? '' : await getBookingCaptchaToken('create_booking_room');
 
             const bookingData = {
@@ -185,12 +245,11 @@ const BookingPage = () => {
                 last_name: guestDetails.lastName,
                 email: guestDetails.email,
                 phone: guestDetails.phone,
-                resource_id: parseInt(selectedUnit.id), // WordPress resource ID
+                resource_id: parseInt(selectedUnit.id),
                 unit_id: selectedUnit.id,
                 unitId: selectedUnit.id,
                 adults: guests.adults,
                 children: guests.children,
-                // Check-in from 15:00, Check-out until 12:00
                 check_in: '15:00',
                 check_out: '12:00',
                 captcha_token: guestCaptchaToken
@@ -199,7 +258,6 @@ const BookingPage = () => {
             const result = await createBooking(bookingData);
             console.log('Booking created:', result);
 
-            // Navigate to success page with booking data
             navigate('/booking-success', {
                 state: {
                     bookingId: result.bookingId || result.booking_id,
@@ -217,11 +275,15 @@ const BookingPage = () => {
     };
 
     // Determine which unavailable dates to show
-    // If a unit is selected, show its specific unavailable dates (derived from bookings in BookingCalendar).
-    // Otherwise, show dates where ALL units are booked (fullyBookedDates state).
     const datesToDisable = selectedUnit ? [] : fullyBookedDates;
 
-
+    // Compute pricing for the bottom bar
+    const pricingInfo = (() => {
+        if (!range?.from || !range?.to || !rangeBreakdown) return null;
+        const nights = differenceInDays(range.to, range.from);
+        const { bestDiscount, finalPrice, savings } = getBestDiscount(roomDiscounts, rangeBreakdown.total);
+        return { nights, total: rangeBreakdown.total, bestDiscount, finalPrice, savings, breakdown: rangeBreakdown.nights };
+    })();
 
     return (
         <div className="min-h-screen bg-gradient-dark pb-40">
@@ -384,6 +446,8 @@ const BookingPage = () => {
                                 bookings={selectedUnit?.bookings || []}
                                 selected={range}
                                 onSelect={setRange}
+                                dayPrices={dayPrices}
+                                onMonthChange={handleMonthChange}
                             />
                         </div>
 
@@ -466,6 +530,45 @@ const BookingPage = () => {
                             </div>
                         </div>
                     </div>
+
+                    {/* Itemized Price Breakdown */}
+                    {pricingInfo && (
+                        <div className="modern-card p-6 animate-slide-up" style={{ animationDelay: '0.25s' }}>
+                            <h2 className="font-bold text-lg text-gray-900 mb-4 flex items-center gap-2">
+                                <Tag size={18} className="text-primary" />
+                                Detalii Preț
+                            </h2>
+                            <div className="price-breakdown-list">
+                                {pricingInfo.breakdown.map((night) => (
+                                    <div key={night.date} className="price-breakdown-row">
+                                        <span className="price-breakdown-date">
+                                            {format(new Date(night.date + 'T00:00:00'), 'dd MMM')}
+                                        </span>
+                                        <span className="price-breakdown-amount">
+                                            {night.price} RON
+                                            {night.label && (
+                                                <span className="price-breakdown-label"> ({night.label})</span>
+                                            )}
+                                            {night.source === 'override' && !night.label && (
+                                                <span className="price-breakdown-label"> (Preț special)</span>
+                                            )}
+                                        </span>
+                                    </div>
+                                ))}
+                                <div className="price-breakdown-divider"></div>
+                                <div className="price-breakdown-row price-breakdown-total">
+                                    <span>Total ({pricingInfo.nights} {pricingInfo.nights === 1 ? 'noapte' : 'nopți'})</span>
+                                    <span>{pricingInfo.total} RON</span>
+                                </div>
+                                {pricingInfo.bestDiscount && (
+                                    <div className="price-breakdown-row price-breakdown-discount">
+                                        <span>Reducere</span>
+                                        <span>-{pricingInfo.savings} RON</span>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    )}
 
                     {/* Personal Details Form - Enhanced */}
                     <div className="modern-card p-6 animate-slide-up" style={{ animationDelay: '0.3s' }}>
@@ -550,28 +653,24 @@ const BookingPage = () => {
             <div className="bottom-bar">
                 <div className="flex items-center justify-between gap-4">
                     <div className="flex-1">
-                        {range?.from && range?.to ? (() => {
-                            const nights = differenceInDays(range.to, range.from);
-                            const pricePerNight = parseInt(item.price.replace(/[^0-9]/g, ''));
-                            const totalPrice = nights * pricePerNight;
-                            const { bestDiscount, finalPrice, savings } = getBestDiscount(roomDiscounts, totalPrice);
+                        {pricingInfo ? (() => {
                             return (
                                 <>
                                     <div className="flex items-baseline gap-2">
-                                        {bestDiscount ? (
+                                        {pricingInfo.bestDiscount ? (
                                             <>
-                                                <span className="price-original">{totalPrice} RON</span>
-                                                <span className="price-discounted">{finalPrice} RON</span>
+                                                <span className="price-original">{pricingInfo.total} RON</span>
+                                                <span className="price-discounted">{pricingInfo.finalPrice} RON</span>
                                             </>
                                         ) : (
-                                            <span className="price-total">{totalPrice} RON</span>
+                                            <span className="price-total">{pricingInfo.total} RON</span>
                                         )}
                                         <span className="price-label">total</span>
                                     </div>
                                     <p className="price-breakdown">
-                                        {nights} {nights === 1 ? 'noapte' : 'nopți'} × {item.price}
-                                        {bestDiscount && (
-                                            <span className="price-savings"> (-{savings} RON)</span>
+                                        {pricingInfo.nights} {pricingInfo.nights === 1 ? 'noapte' : 'nopți'}
+                                        {pricingInfo.bestDiscount && (
+                                            <span className="price-savings"> (-{pricingInfo.savings} RON)</span>
                                         )}
                                     </p>
                                 </>
@@ -579,7 +678,9 @@ const BookingPage = () => {
                         })() : (
                             <>
                                 <div className="flex items-baseline gap-2">
-                                    <span className="price-total">{item.price}</span>
+                                    <span className="price-total">
+                                        {item.basePrice ?? parseInt(String(item.price).replace(/[^0-9]/g, ''), 10)} RON
+                                    </span>
                                     <span className="price-label">/ noapte</span>
                                 </div>
                                 <p className="price-cta">Selectează datele</p>
