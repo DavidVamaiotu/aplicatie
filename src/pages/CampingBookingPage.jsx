@@ -1,15 +1,16 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { createBooking } from '../services/api';
 import { getBookingCaptchaToken } from '../services/captchaService';
 import { useAuth } from '../context/AuthContext';
 import { auth } from '../firebase';
+import { fetchMonthlyOverrides, buildDayPricesMap, calculateRangeTotal, ensureOverridesForMonths } from '../services/pricingService';
 import { useParams, useNavigate } from 'react-router-dom';
 import { format, addDays, isSameDay, differenceInDays } from 'date-fns';
 import { getItemById } from '../data/rooms';
 import Button from '../components/Button';
 import BookingCalendar from "../components/BookingCalendar";
 import SuccessModal from '../components/SuccessModal';
-import { X, ArrowRight, Minus, Plus, Share, Wifi, Tv, Flame, Wind, Utensils, Key, Award, Clock, User, Mail, Phone, Sparkles, Calendar, Users, ChevronDown, MapPin, Car, TreePine } from 'lucide-react';
+import { X, ArrowRight, Minus, Plus, Share, Wifi, Tv, Flame, Wind, Utensils, Key, Award, Clock, User, Mail, Phone, Sparkles, Calendar, Users, ChevronDown, MapPin, Car, TreePine, Tag } from 'lucide-react';
 import 'react-day-picker/dist/style.css';
 
 const capitalizeFirstLetter = (string) => {
@@ -50,14 +51,82 @@ const CampingBookingPage = () => {
     const [showSuccessModal, setShowSuccessModal] = useState(false);
     const [bookingResult, setBookingResult] = useState(null);
 
+    // Pricing state
+    const [dayPrices, setDayPrices] = useState(null);
+    const [overridesCache, setOverridesCache] = useState({});
+    const [rangeBreakdown, setRangeBreakdown] = useState(null);
+
     React.useEffect(() => {
         const fetchItem = async () => {
             const data = await getItemById(id);
             setItem(data);
+
+            if (data) {
+                // Fetch current month overrides for pricing calendar
+                const monthKey = format(today, 'yyyy-MM');
+                const overrides = await fetchMonthlyOverrides(data.id, monthKey);
+                setOverridesCache(prev => ({ ...prev, [monthKey]: overrides }));
+                const pricesMap = buildDayPricesMap(today.getFullYear(), today.getMonth(), data, overrides);
+                setDayPrices(pricesMap);
+            }
+
             setFetchingItem(false);
         };
         fetchItem();
     }, [id]);
+
+    // Handle calendar month change
+    const handleMonthChange = useCallback(async (month) => {
+        if (!item) return;
+        const monthKey = format(month, 'yyyy-MM');
+
+        let overrides = overridesCache[monthKey];
+        if (overrides === undefined) {
+            overrides = await fetchMonthlyOverrides(item.id, monthKey);
+            setOverridesCache(prev => ({ ...prev, [monthKey]: overrides }));
+        }
+
+        const pricesMap = buildDayPricesMap(month.getFullYear(), month.getMonth(), item, overrides);
+        setDayPrices(pricesMap);
+    }, [item, overridesCache]);
+
+    // Calculate breakdown when range changes
+    useEffect(() => {
+        if (!range?.from || !range?.to || !item) {
+            setRangeBreakdown(null);
+            return;
+        }
+
+        const calculateBreakdown = async () => {
+            const months = new Set();
+            let cursor = new Date(range.from);
+            const end = new Date(range.to);
+            while (cursor < end) {
+                months.add(format(cursor, 'yyyy-MM'));
+                cursor = addDays(cursor, 1);
+            }
+
+            const missingMonths = [...months].filter(m => overridesCache[m] === undefined);
+            if (missingMonths.length > 0) {
+                const fetched = await ensureOverridesForMonths(item.id, missingMonths);
+                const newCache = { ...overridesCache };
+                fetched.forEach((data, key) => {
+                    newCache[key] = data;
+                });
+                setOverridesCache(newCache);
+            }
+
+            const overridesMap = new Map();
+            months.forEach(m => {
+                overridesMap.set(m, overridesCache[m] ?? null);
+            });
+
+            const breakdown = calculateRangeTotal(range.from, range.to, item, overridesMap);
+            setRangeBreakdown(breakdown);
+        };
+
+        calculateBreakdown();
+    }, [range?.from, range?.to, item, overridesCache]);
 
     if (fetchingItem) return (
         <div className="min-h-screen flex items-center justify-center bg-gradient-dark">
@@ -157,6 +226,14 @@ const CampingBookingPage = () => {
         }
     };
 
+    // Compute pricing for the bottom bar
+    const pricingInfo = (() => {
+        if (!range?.from || !range?.to || !rangeBreakdown) return null;
+        const nights = differenceInDays(range.to, range.from);
+        const totalWithGuests = rangeBreakdown.total * totalGuests;
+        return { nights, perUnitTotal: rangeBreakdown.total, total: totalWithGuests, breakdown: rangeBreakdown.nights };
+    })();
+
     return (
         <div className="min-h-screen bg-gradient-dark pb-40">
             {/* Top Image Section - Edge to edge with rounded bottom */}
@@ -166,7 +243,6 @@ const CampingBookingPage = () => {
                     alt={item.title}
                     className="w-full h-full object-cover hero-image"
                 />
-                {/* Dark gradient overlay for status bar visibility */}
                 <div className="absolute top-0 left-0 right-0 h-24 bg-gradient-to-b from-black/40 to-transparent"></div>
                 <div className="absolute top-0 left-0 right-0 p-4 pt-safe flex justify-between items-start">
                     <button
@@ -179,7 +255,6 @@ const CampingBookingPage = () => {
                         <Clock size={20} className="text-gray-900" />
                     </button>
                 </div>
-                {/* Image counter badge */}
                 <div className="absolute bottom-4 right-4 glass-badge px-3 py-1.5 rounded-lg text-xs font-medium">
                     <span className="text-white">1 / 7</span>
                 </div>
@@ -188,14 +263,13 @@ const CampingBookingPage = () => {
             <div className="px-5 py-6 flex flex-col gap-6">
                 {/* Details Section - Modern Card */}
                 <div className="modern-card p-6 animate-slide-up">
-                    {/* Title */}
                     <div>
                         <h1 className="text-2xl font-bold text-gray-900 mb-3 leading-tight">{item.title}</h1>
                     </div>
 
                     <div className="section-divider"></div>
 
-                    {/* Amenities - Modern Pills */}
+                    {/* Amenities */}
                     <div>
                         <h2 className="font-bold text-lg text-gray-900 mb-4 flex items-center gap-2">
                             <Sparkles size={18} className="text-primary" />
@@ -216,7 +290,7 @@ const CampingBookingPage = () => {
 
                     <div className="section-divider"></div>
 
-                    {/* Highlights - Enhanced */}
+                    {/* Highlights */}
                     <div className="flex flex-col gap-5">
                         <div className="highlight-item">
                             <div className="highlight-icon">
@@ -255,19 +329,20 @@ const CampingBookingPage = () => {
                         Selectează Perioada
                     </h2>
 
-                    {/* Calendar & Guest Selection - Enhanced Card (No unit selection for camping) */}
+                    {/* Calendar & Guest Selection */}
                     <div className="modern-card p-6 flex flex-col gap-8 animate-slide-up" style={{ animationDelay: '0.2s' }}>
-                        {/* Calendar */}
                         <div className="flex justify-center">
                             <BookingCalendar
                                 unavailableDates={[]}
                                 bookings={[]}
                                 selected={range}
                                 onSelect={setRange}
+                                dayPrices={dayPrices}
+                                onMonthChange={handleMonthChange}
                             />
                         </div>
 
-                        {/* Dates Display - Modern */}
+                        {/* Dates Display */}
                         <div className="dates-display">
                             <div className="date-box">
                                 <p className="date-label">SOSIRE</p>
@@ -294,51 +369,33 @@ const CampingBookingPage = () => {
                             </div>
                         </div>
 
-                        {/* Guest Counters - Enhanced */}
+                        {/* Guest Counters */}
                         <div className="guests-container">
                             <h3 className="font-bold text-lg text-gray-900 mb-5 flex items-center justify-center gap-2">
                                 <Users size={18} className="text-primary" />
                                 Oaspeți
                             </h3>
                             <div className="flex justify-center gap-10">
-                                {/* Adults */}
                                 <div className="guest-counter">
                                     <p className="guest-label">Adulți</p>
                                     <p className="guest-value">{guests.adults}</p>
                                     <div className="counter-buttons">
-                                        <button
-                                            type="button"
-                                            onClick={() => setGuests(g => ({ ...g, adults: Math.max(1, g.adults - 1) }))}
-                                            className="counter-btn tap-highlight"
-                                        >
+                                        <button type="button" onClick={() => setGuests(g => ({ ...g, adults: Math.max(1, g.adults - 1) }))} className="counter-btn tap-highlight">
                                             <Minus size={18} />
                                         </button>
-                                        <button
-                                            type="button"
-                                            onClick={() => setGuests(g => ({ ...g, adults: g.adults + 1 }))}
-                                            className="counter-btn tap-highlight"
-                                        >
+                                        <button type="button" onClick={() => setGuests(g => ({ ...g, adults: g.adults + 1 }))} className="counter-btn tap-highlight">
                                             <Plus size={18} />
                                         </button>
                                     </div>
                                 </div>
-                                {/* Children */}
                                 <div className="guest-counter">
                                     <p className="guest-label">Copii</p>
                                     <p className="guest-value">{guests.children}</p>
                                     <div className="counter-buttons">
-                                        <button
-                                            type="button"
-                                            onClick={() => setGuests(g => ({ ...g, children: Math.max(0, g.children - 1) }))}
-                                            className="counter-btn tap-highlight"
-                                        >
+                                        <button type="button" onClick={() => setGuests(g => ({ ...g, children: Math.max(0, g.children - 1) }))} className="counter-btn tap-highlight">
                                             <Minus size={18} />
                                         </button>
-                                        <button
-                                            type="button"
-                                            onClick={() => setGuests(g => ({ ...g, children: g.children + 1 }))}
-                                            className="counter-btn tap-highlight"
-                                        >
+                                        <button type="button" onClick={() => setGuests(g => ({ ...g, children: g.children + 1 }))} className="counter-btn tap-highlight">
                                             <Plus size={18} />
                                         </button>
                                     </div>
@@ -347,7 +404,40 @@ const CampingBookingPage = () => {
                         </div>
                     </div>
 
-                    {/* Personal Details Form - Enhanced */}
+                    {/* Itemized Price Breakdown */}
+                    {pricingInfo && (
+                        <div className="modern-card p-6 animate-slide-up" style={{ animationDelay: '0.25s' }}>
+                            <h2 className="font-bold text-lg text-gray-900 mb-4 flex items-center gap-2">
+                                <Tag size={18} className="text-primary" />
+                                Detalii Preț
+                            </h2>
+                            <div className="price-breakdown-list">
+                                {pricingInfo.breakdown.map((night) => (
+                                    <div key={night.date} className="price-breakdown-row">
+                                        <span className="price-breakdown-date">
+                                            {format(new Date(night.date + 'T00:00:00'), 'dd MMM')}
+                                        </span>
+                                        <span className="price-breakdown-amount">
+                                            {night.price} × {totalGuests} = {night.price * totalGuests} RON
+                                            {night.label && (
+                                                <span className="price-breakdown-label"> ({night.label})</span>
+                                            )}
+                                            {night.source === 'override' && !night.label && (
+                                                <span className="price-breakdown-label"> (Preț special)</span>
+                                            )}
+                                        </span>
+                                    </div>
+                                ))}
+                                <div className="price-breakdown-divider"></div>
+                                <div className="price-breakdown-row price-breakdown-total">
+                                    <span>Total ({pricingInfo.nights} {pricingInfo.nights === 1 ? 'noapte' : 'nopți'} × {totalGuests} {totalGuests === 1 ? 'persoană' : 'persoane'})</span>
+                                    <span>{pricingInfo.total} RON</span>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Personal Details Form */}
                     <div className="modern-card p-6 animate-slide-up" style={{ animationDelay: '0.3s' }}>
                         <h2 className="font-bold text-lg text-gray-900 mb-6 flex items-center gap-2">
                             <User size={18} className="text-primary" />
@@ -358,16 +448,7 @@ const CampingBookingPage = () => {
                                 <label htmlFor="firstName" className="input-label">Prenume</label>
                                 <div className="input-wrapper">
                                     <User size={18} className="input-icon" />
-                                    <input
-                                        id="firstName"
-                                        type="text"
-                                        name="firstName"
-                                        autoComplete="given-name"
-                                        placeholder="Numele tău"
-                                        value={guestDetails.firstName}
-                                        onChange={(e) => setGuestDetails({ ...guestDetails, firstName: e.target.value })}
-                                        className="modern-input"
-                                    />
+                                    <input id="firstName" type="text" name="firstName" autoComplete="given-name" placeholder="Numele tău" value={guestDetails.firstName} onChange={(e) => setGuestDetails({ ...guestDetails, firstName: e.target.value })} className="modern-input" />
                                 </div>
                             </div>
 
@@ -375,16 +456,7 @@ const CampingBookingPage = () => {
                                 <label htmlFor="lastName" className="input-label">Nume de Familie</label>
                                 <div className="input-wrapper">
                                     <User size={18} className="input-icon" />
-                                    <input
-                                        id="lastName"
-                                        type="text"
-                                        name="lastName"
-                                        autoComplete="family-name"
-                                        placeholder="Numele de familie"
-                                        value={guestDetails.lastName}
-                                        onChange={(e) => setGuestDetails({ ...guestDetails, lastName: e.target.value })}
-                                        className="modern-input"
-                                    />
+                                    <input id="lastName" type="text" name="lastName" autoComplete="family-name" placeholder="Numele de familie" value={guestDetails.lastName} onChange={(e) => setGuestDetails({ ...guestDetails, lastName: e.target.value })} className="modern-input" />
                                 </div>
                             </div>
 
@@ -392,16 +464,7 @@ const CampingBookingPage = () => {
                                 <label htmlFor="email" className="input-label">Email</label>
                                 <div className="input-wrapper">
                                     <Mail size={18} className="input-icon" />
-                                    <input
-                                        id="email"
-                                        type="email"
-                                        name="email"
-                                        autoComplete="email"
-                                        placeholder="email@exemplu.com"
-                                        value={guestDetails.email}
-                                        onChange={(e) => setGuestDetails({ ...guestDetails, email: e.target.value })}
-                                        className="modern-input"
-                                    />
+                                    <input id="email" type="email" name="email" autoComplete="email" placeholder="email@exemplu.com" value={guestDetails.email} onChange={(e) => setGuestDetails({ ...guestDetails, email: e.target.value })} className="modern-input" />
                                 </div>
                             </div>
 
@@ -409,16 +472,7 @@ const CampingBookingPage = () => {
                                 <label htmlFor="phone" className="input-label">Telefon</label>
                                 <div className="input-wrapper">
                                     <Phone size={18} className="input-icon" />
-                                    <input
-                                        id="phone"
-                                        type="tel"
-                                        name="phone"
-                                        autoComplete="tel"
-                                        placeholder="+40 700 000 000"
-                                        value={guestDetails.phone}
-                                        onChange={(e) => setGuestDetails({ ...guestDetails, phone: e.target.value })}
-                                        className="modern-input"
-                                    />
+                                    <input id="phone" type="tel" name="phone" autoComplete="tel" placeholder="+40 700 000 000" value={guestDetails.phone} onChange={(e) => setGuestDetails({ ...guestDetails, phone: e.target.value })} className="modern-input" />
                                 </div>
                             </div>
 
@@ -429,15 +483,7 @@ const CampingBookingPage = () => {
                                 </label>
                                 <div className="input-wrapper">
                                     <Car size={18} className="input-icon" />
-                                    <input
-                                        id="licensePlate"
-                                        type="text"
-                                        name="licensePlate"
-                                        placeholder="ex: B 123 ABC"
-                                        value={guestDetails.licensePlate}
-                                        onChange={(e) => setGuestDetails({ ...guestDetails, licensePlate: e.target.value })}
-                                        className="modern-input"
-                                    />
+                                    <input id="licensePlate" type="text" name="licensePlate" placeholder="ex: B 123 ABC" value={guestDetails.licensePlate} onChange={(e) => setGuestDetails({ ...guestDetails, licensePlate: e.target.value })} className="modern-input" />
                                 </div>
                             </div>
                         </form>
@@ -445,36 +491,32 @@ const CampingBookingPage = () => {
                 </div>
             </div>
 
-            {/* Bottom Fixed Bar - Premium Floating Design */}
+            {/* Bottom Fixed Bar */}
             <div className="bottom-bar">
                 <div className="flex items-center justify-between gap-4">
                     <div className="flex-1">
-                        {range?.from && range?.to ? (() => {
-                            const nights = differenceInDays(range.to, range.from);
-                            const pricePerNight = parseInt(item.price.replace(/[^0-9]/g, ''));
-                            const totalPrice = totalGuests * nights * pricePerNight;
-                            return (
-                                <>
-                                    <div className="flex items-baseline gap-2">
-                                        <span className="price-total">{totalPrice} RON</span>
-                                        <span className="price-label">total</span>
-                                    </div>
-                                    <p className="price-breakdown">
-                                        {totalGuests} {totalGuests === 1 ? 'persoană' : 'persoane'} × {nights} {nights === 1 ? 'noapte' : 'nopți'} × {pricePerNight} RON
-                                    </p>
-                                </>
-                            );
-                        })() : (
+                        {pricingInfo ? (
                             <>
                                 <div className="flex items-baseline gap-2">
-                                    <span className="price-total">{item.price}</span>
+                                    <span className="price-total">{pricingInfo.total} RON</span>
+                                    <span className="price-label">total</span>
+                                </div>
+                                <p className="price-breakdown">
+                                    {totalGuests} {totalGuests === 1 ? 'persoană' : 'persoane'} × {pricingInfo.nights} {pricingInfo.nights === 1 ? 'noapte' : 'nopți'}
+                                </p>
+                            </>
+                        ) : (
+                            <>
+                                <div className="flex items-baseline gap-2">
+                                    <span className="price-total">
+                                        {(item.basePrice ?? parseInt(String(item.price).replace(/[^0-9]/g, ''), 10)) || 0} RON
+                                    </span>
                                     <span className="price-label">/ noapte / pers.</span>
                                 </div>
                                 <p className="price-cta">Selectează datele</p>
                             </>
                         )}
                     </div>
-                    {/* Book Now Button - Premium Style */}
                     <button
                         onClick={(e) => {
                             if (!range?.from || !guestDetails.firstName) {

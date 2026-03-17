@@ -7,6 +7,7 @@ import ScrollReveal from '../components/ScrollReveal';
 import { getRooms } from '../data/rooms';
 import { useAuth } from '../context/AuthContext';
 import { fetchUserDiscounts, getRoomDiscounts } from '../services/discountService';
+import { resolveTodayPrice } from '../services/pricingService';
 
 const Home = () => {
     const navigate = useNavigate();
@@ -14,12 +15,26 @@ const Home = () => {
     const [rooms, setRooms] = React.useState([]);
     const [loading, setLoading] = React.useState(true);
     const [userDiscounts, setUserDiscounts] = React.useState([]);
+    const [todayPrices, setTodayPrices] = React.useState({});
 
     React.useEffect(() => {
         const fetchRooms = async () => {
             const data = await getRooms();
             setRooms(data);
             setLoading(false);
+
+            // Resolve today's price for each room in parallel
+            const priceEntries = await Promise.all(
+                data.map(async (room) => {
+                    try {
+                        const price = await resolveTodayPrice(room);
+                        return [room.id, price];
+                    } catch {
+                        return [room.id, null];
+                    }
+                })
+            );
+            setTodayPrices(Object.fromEntries(priceEntries));
         };
         fetchRooms();
     }, []);
@@ -93,7 +108,12 @@ const Home = () => {
                             const bestDisc = roomDiscs.length > 0 ? roomDiscs[0] : null;
                             return (
                                 <ScrollReveal key={room.id}>
-                                    <RoomCard room={room} onBook={handleBook} discount={bestDisc} />
+                                    <RoomCard
+                                        room={room}
+                                        onBook={handleBook}
+                                        discount={bestDisc}
+                                        todayPrice={todayPrices[room.id] || null}
+                                    />
                                 </ScrollReveal>
                             );
                         })
@@ -118,4 +138,3 @@ const Home = () => {
 };
 
 export default Home;
-

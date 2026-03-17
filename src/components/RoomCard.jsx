@@ -1,7 +1,15 @@
 import React from 'react';
 import { Users, Bed, ChevronRight, Tag } from 'lucide-react';
 
-const RoomCard = ({ room, onBook, discount }) => {
+const RoomCard = ({ room, onBook, discount, todayPrice }) => {
+    // Determine displayed price: prefer resolved todayPrice, fall back to room fields
+    const displayPrice = (todayPrice?.price
+        ?? room.basePrice
+        ?? parseInt(String(room.price).replace(/[^0-9]/g, ''), 10))
+        || 0;
+
+    const priceLabel = todayPrice?.label; // Optional — only shown when present
+
     return (
         <div
             className="room-card group tap-highlight"
@@ -16,9 +24,15 @@ const RoomCard = ({ room, onBook, discount }) => {
                 />
                 {/* Price Tag */}
                 <div className="room-card-price-tag">
-                    <span className="price">{room.price}</span>
+                    <span className="price">{displayPrice} RON</span>
                     <span className="per-night"> / noapte</span>
                 </div>
+                {/* Seasonal Label */}
+                {priceLabel && (
+                    <div className="room-card-season-badge">
+                        {priceLabel}
+                    </div>
+                )}
                 {/* Discount Badge */}
                 {discount && (
                     <div className="room-card-discount-badge">
@@ -79,4 +93,3 @@ const RoomCard = ({ room, onBook, discount }) => {
 };
 
 export default RoomCard;
-

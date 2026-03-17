@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useCallback } from "react";
 import { DayPicker } from "react-day-picker";
 import { addDays, isSameDay, parseISO, format } from "date-fns";
 import { ro } from "date-fns/locale";
@@ -19,12 +19,35 @@ function hasChainedBooking(startSet, endSet) {
   return false;
 }
 
+/**
+ * Custom day content renderer that shows per-day pricing.
+ * Renders the day number + a small price label below it.
+ */
+function PricedDayContent({ date, dayPrices, currency = "RON" }) {
+  const dateKey = format(date, "yyyy-MM-dd");
+  const pricing = dayPrices?.get?.(dateKey);
+
+  return (
+    <div className="pricing-day-cell">
+      <span className="pricing-day-number">{date.getDate()}</span>
+      {pricing && (
+        <span className={`pricing-day-price${pricing.source === 'override' ? ' pricing-override' : ''}`}>
+          {pricing.price}
+        </span>
+      )}
+    </div>
+  );
+}
+
 export default function BookingCalendar({
   unavailableDates = [],
   bookings = [],
   selected,
   onSelect,
-  className
+  className,
+  dayPrices,
+  currency = "RON",
+  onMonthChange
 }) {
   const {
     bookedStart,
@@ -164,12 +187,25 @@ export default function BookingCalendar({
     return days;
   }, [bookedMiddle, chained, selected?.from, selected?.to, sortedBookingStartDates, unavailableDates]);
 
+  // Month change handler
+  const handleMonthChange = useCallback((month) => {
+    if (onMonthChange) {
+      onMonthChange(month);
+    }
+  }, [onMonthChange]);
+
+  // Custom day content with pricing
+  const renderDayContent = useCallback((props) => {
+    return <PricedDayContent date={props.date} dayPrices={dayPrices} currency={currency} />;
+  }, [dayPrices, currency]);
+
   return (
     <div className={`relative ${className || ''}`}>
       <DayPicker
         mode="range"
         selected={selected}
         onSelect={handleRangeSelect}
+        onMonthChange={handleMonthChange}
         showOutsideDays={true}
         locale={ro}
         weekStartsOn={1}
@@ -191,8 +227,9 @@ export default function BookingCalendar({
           chained: "chained"
         }}
         styles={{
-          day: { margin: 0, width: "40px", height: "40px" }
+          day: { margin: 0, width: "40px", height: dayPrices ? "52px" : "40px" }
         }}
+        components={dayPrices ? { DayContent: renderDayContent } : undefined}
       />
     </div>
   );

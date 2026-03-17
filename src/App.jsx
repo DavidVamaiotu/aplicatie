@@ -17,6 +17,7 @@ const BookingPage = lazy(() => import('./pages/BookingPage'));
 const CampingBookingPage = lazy(() => import('./pages/CampingBookingPage'));
 const BookingSuccess = lazy(() => import('./pages/BookingSuccess'));
 const LoginPage = lazy(() => import('./pages/LoginPage'));
+const AdminPricing = lazy(() => import('./pages/AdminPricing'));
 
 function RouteLoadingFallback() {
   return (
@@ -94,6 +95,7 @@ function AppContent() {
           <Route path="account" element={<Account />} />
           <Route path="book/:type/:id" element={<BookingPage />} />
           <Route path="book-camping/:id" element={<CampingBookingPage />} />
+          <Route path="admin/pricing" element={<AdminPricing />} />
         </Route>
         <Route path="/booking-success" element={<BookingSuccess />} />
       </Routes>

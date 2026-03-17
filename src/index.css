@@ -5161,3 +5161,329 @@ img {
   background: linear-gradient(135deg, #22c55e 0%, #15803d 100%);
   box-shadow: 0 2px 8px rgba(74, 222, 128, 0.4);
 }
+
+/* =====================================
+   Calendar Pricing Day Tiles
+   ===================================== */
+.pricing-day-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  line-height: 1.1;
+  gap: 2px;
+}
+
+.pricing-day-number {
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.pricing-day-price {
+  font-size: 0.6rem;
+  font-weight: 700;
+  color: var(--color-primary);
+  opacity: 0.85;
+  white-space: nowrap;
+}
+
+.pricing-day-price.pricing-override {
+  color: #d97706;
+  position: relative;
+}
+
+.pricing-day-price.pricing-override::after {
+  content: '';
+  position: absolute;
+  bottom: -3px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: #d97706;
+}
+
+.dark .pricing-day-price {
+  color: #4ade80;
+}
+
+.dark .pricing-day-price.pricing-override {
+  color: #fbbf24;
+}
+
+.dark .pricing-day-price.pricing-override::after {
+  background: #fbbf24;
+}
+
+/* =====================================
+   Room Card Season Badge
+   ===================================== */
+.room-card-season-badge {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  padding: 4px 10px;
+  border-radius: var(--radius-full);
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(8px);
+  color: white;
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  z-index: 2;
+}
+
+/* =====================================
+   Itemized Price Breakdown Card
+   ===================================== */
+.price-breakdown-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.price-breakdown-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.85rem;
+  color: var(--color-text);
+  opacity: 0.8;
+}
+
+.price-breakdown-date {
+  font-weight: 500;
+  min-width: 60px;
+}
+
+.price-breakdown-amount {
+  font-weight: 600;
+  text-align: right;
+}
+
+.price-breakdown-label {
+  font-size: 0.7rem;
+  font-weight: 500;
+  color: var(--color-text-light);
+  opacity: 0.7;
+}
+
+.price-breakdown-divider {
+  height: 1px;
+  background: var(--color-border);
+  margin: 0.375rem 0;
+}
+
+.price-breakdown-total {
+  font-size: 1rem;
+  font-weight: 800;
+  opacity: 1;
+  color: var(--color-text);
+}
+
+.price-breakdown-discount {
+  font-weight: 700;
+  color: #15803d;
+  opacity: 1;
+}
+
+.dark .price-breakdown-discount {
+  color: #4ade80;
+}
+
+/* =====================================
+   Admin Pricing Page
+   ===================================== */
+.admin-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 1.25rem;
+  padding-top: calc(env(safe-area-inset-top, 0px) + 1rem);
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.admin-rule-card {
+  background: var(--color-background);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 0.875rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+}
+
+.admin-rule-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.admin-date-input,
+.admin-price-input,
+.admin-label-input,
+.admin-day-input,
+.admin-month-input {
+  flex: 1;
+  min-width: 0;
+  padding: 0.5rem 0.75rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: 0.85rem;
+  font-weight: 500;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.admin-date-input:focus,
+.admin-price-input:focus,
+.admin-label-input:focus,
+.admin-day-input:focus,
+.admin-month-input:focus {
+  border-color: var(--color-primary);
+}
+
+.admin-day-input {
+  max-width: 70px;
+}
+
+.admin-price-input {
+  max-width: 100px;
+}
+
+.admin-delete-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: var(--radius-sm);
+  background: rgba(239, 68, 68, 0.08);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  color: #ef4444;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all 0.2s;
+}
+
+.admin-delete-btn:hover {
+  background: rgba(239, 68, 68, 0.15);
+}
+
+.admin-add-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.5rem 0.875rem;
+  border-radius: var(--radius-sm);
+  background: rgba(21, 128, 61, 0.08);
+  border: 1px solid rgba(21, 128, 61, 0.2);
+  color: var(--color-primary);
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.admin-add-btn:hover {
+  background: rgba(21, 128, 61, 0.15);
+}
+
+.admin-save-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.75rem 1rem;
+  border-radius: var(--radius-md);
+  background: linear-gradient(135deg, #15803d 0%, #166534 100%);
+  color: white;
+  font-size: 0.9rem;
+  font-weight: 600;
+  border: none;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(21, 128, 61, 0.3);
+  transition: all 0.3s ease;
+}
+
+.admin-save-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 20px rgba(21, 128, 61, 0.4);
+}
+
+.admin-save-btn:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.admin-override-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.625rem 0.875rem;
+  background: var(--color-background);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-size: 0.85rem;
+}
+
+.admin-add-override-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* Dark Mode - Admin */
+.dark .admin-header {
+  background: #0f1a15;
+  border-color: rgba(74, 222, 128, 0.1);
+}
+
+.dark .admin-rule-card {
+  background: #0a0f0d;
+  border-color: rgba(74, 222, 128, 0.1);
+}
+
+.dark .admin-date-input,
+.dark .admin-price-input,
+.dark .admin-label-input,
+.dark .admin-day-input,
+.dark .admin-month-input {
+  background: #0a0f0d;
+  border-color: rgba(74, 222, 128, 0.15);
+  color: #dcfce7;
+}
+
+.dark .admin-save-btn {
+  background: linear-gradient(135deg, #22c55e 0%, #15803d 100%);
+  color: #052e16;
+}
+
+.dark .admin-override-row {
+  background: #0a0f0d;
+  border-color: rgba(74, 222, 128, 0.1);
+}
+
+.dark .admin-add-btn {
+  background: rgba(74, 222, 128, 0.1);
+  border-color: rgba(74, 222, 128, 0.2);
+  color: #4ade80;
+}
+
+.dark .admin-delete-btn {
+  background: rgba(239, 68, 68, 0.12);
+  border-color: rgba(239, 68, 68, 0.25);
+  color: #fca5a5;
+}
