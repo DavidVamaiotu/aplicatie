@@ -121,6 +121,34 @@ export function calculateRangeTotal(from, to, roomData, overridesMap) {
 }
 
 /**
+ * Group consecutive nights with the same price / source / label into ranges.
+ * Turns a long per-night list into a compact breakdown.
+ *
+ * @param {Array<{ date: string, price: number, source: string, label?: string }>} nights
+ * @returns {Array<{ from: string, to: string, price: number, count: number, subtotal: number, source: string, label?: string }>}
+ */
+export function groupBreakdownNights(nights) {
+  if (!nights || nights.length === 0) return [];
+
+  const groups = [];
+  let current = { ...nights[0], from: nights[0].date, to: nights[0].date, count: 1, subtotal: nights[0].price };
+
+  for (let i = 1; i < nights.length; i++) {
+    const n = nights[i];
+    if (n.price === current.price && n.source === current.source && (n.label || '') === (current.label || '')) {
+      current.to = n.date;
+      current.count += 1;
+      current.subtotal += n.price;
+    } else {
+      groups.push(current);
+      current = { ...n, from: n.date, to: n.date, count: 1, subtotal: n.price };
+    }
+  }
+  groups.push(current);
+  return groups;
+}
+
+/**
  * Convenience: resolve today's price for a room (used by room cards).
  * Fetches the current month's overrides (session-cached) and resolves.
  *

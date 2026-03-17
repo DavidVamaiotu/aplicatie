@@ -3,7 +3,7 @@ import { createBooking } from '../services/api';
 import { getBookingCaptchaToken } from '../services/captchaService';
 import { useAuth } from '../context/AuthContext';
 import { auth } from '../firebase';
-import { fetchMonthlyOverrides, buildDayPricesMap, calculateRangeTotal, ensureOverridesForMonths } from '../services/pricingService';
+import { fetchMonthlyOverrides, buildDayPricesMap, calculateRangeTotal, ensureOverridesForMonths, groupBreakdownNights } from '../services/pricingService';
 import { useParams, useNavigate } from 'react-router-dom';
 import { format, addDays, isSameDay, differenceInDays } from 'date-fns';
 import { getItemById } from '../data/rooms';
@@ -412,17 +412,23 @@ const CampingBookingPage = () => {
                                 Detalii Preț
                             </h2>
                             <div className="price-breakdown-list">
-                                {pricingInfo.breakdown.map((night) => (
-                                    <div key={night.date} className="price-breakdown-row">
+                                {groupBreakdownNights(pricingInfo.breakdown).map((group, i) => (
+                                    <div key={i} className="price-breakdown-row">
                                         <span className="price-breakdown-date">
-                                            {format(new Date(night.date + 'T00:00:00'), 'dd MMM')}
+                                            {group.count === 1
+                                                ? format(new Date(group.from + 'T00:00:00'), 'dd MMM')
+                                                : `${format(new Date(group.from + 'T00:00:00'), 'dd')}–${format(new Date(group.to + 'T00:00:00'), 'dd MMM')}`
+                                            }
                                         </span>
                                         <span className="price-breakdown-amount">
-                                            {night.price} × {totalGuests} = {night.price * totalGuests} RON
-                                            {night.label && (
-                                                <span className="price-breakdown-label"> ({night.label})</span>
+                                            {group.count === 1
+                                                ? `${group.price} × ${totalGuests} = ${group.price * totalGuests} RON`
+                                                : `${group.price} × ${group.count} nopți × ${totalGuests} = ${group.subtotal * totalGuests} RON`
+                                            }
+                                            {group.label && (
+                                                <span className="price-breakdown-label"> ({group.label})</span>
                                             )}
-                                            {night.source === 'override' && !night.label && (
+                                            {group.source === 'override' && !group.label && (
                                                 <span className="price-breakdown-label"> (Preț special)</span>
                                             )}
                                         </span>
