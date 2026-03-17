@@ -509,6 +509,7 @@ const BookingPage = () => {
                                 {/* Children */}
                                 <div className="guest-counter">
                                     <p className="guest-label">Copii</p>
+                                    <p className="guest-sublabel">50% reducere</p>
                                     <p className="guest-value">{guests.children}</p>
                                     <div className="counter-buttons">
                                         <button

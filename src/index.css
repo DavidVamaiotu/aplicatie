@@ -1962,6 +1962,14 @@ img {
   color: #6b7280;
 }
 
+.guest-sublabel {
+  font-size: 0.65rem;
+  font-weight: 600;
+  color: var(--color-primary);
+  opacity: 0.8;
+  margin-top: -2px;
+}
+
 .guest-value {
   font-weight: 700;
   font-size: 2rem;

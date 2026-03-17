@@ -136,6 +136,8 @@ const CampingBookingPage = () => {
     if (!item) return <div className="min-h-screen flex items-center justify-center">Item not found</div>;
 
     const totalGuests = guests.adults + guests.children;
+    // Kids are half price: effective multiplier for billing
+    const effectiveGuests = guests.adults + guests.children * 0.5;
 
     const handleSubmit = async (e) => {
         e.preventDefault();
@@ -230,7 +232,7 @@ const CampingBookingPage = () => {
     const pricingInfo = (() => {
         if (!range?.from || !range?.to || !rangeBreakdown) return null;
         const nights = differenceInDays(range.to, range.from);
-        const totalWithGuests = rangeBreakdown.total * totalGuests;
+        const totalWithGuests = Math.round(rangeBreakdown.total * effectiveGuests);
         return { nights, perUnitTotal: rangeBreakdown.total, total: totalWithGuests, breakdown: rangeBreakdown.nights };
     })();
 
@@ -390,6 +392,7 @@ const CampingBookingPage = () => {
                                 </div>
                                 <div className="guest-counter">
                                     <p className="guest-label">Copii</p>
+                                    <p className="guest-sublabel">50% reducere</p>
                                     <p className="guest-value">{guests.children}</p>
                                     <div className="counter-buttons">
                                         <button type="button" onClick={() => setGuests(g => ({ ...g, children: Math.max(0, g.children - 1) }))} className="counter-btn tap-highlight">
@@ -422,8 +425,8 @@ const CampingBookingPage = () => {
                                         </span>
                                         <span className="price-breakdown-amount">
                                             {group.count === 1
-                                                ? `${group.price} × ${totalGuests} = ${group.price * totalGuests} RON`
-                                                : `${group.price} × ${group.count} nopți × ${totalGuests} = ${group.subtotal * totalGuests} RON`
+                                                ? `${group.price} × ${effectiveGuests} = ${Math.round(group.price * effectiveGuests)} RON`
+                                                : `${group.price} × ${group.count} nopți × ${effectiveGuests} = ${Math.round(group.subtotal * effectiveGuests)} RON`
                                             }
                                             {group.label && (
                                                 <span className="price-breakdown-label"> ({group.label})</span>
@@ -436,7 +439,7 @@ const CampingBookingPage = () => {
                                 ))}
                                 <div className="price-breakdown-divider"></div>
                                 <div className="price-breakdown-row price-breakdown-total">
-                                    <span>Total ({pricingInfo.nights} {pricingInfo.nights === 1 ? 'noapte' : 'nopți'} × {totalGuests} {totalGuests === 1 ? 'persoană' : 'persoane'})</span>
+                                    <span>Total ({pricingInfo.nights} {pricingInfo.nights === 1 ? 'noapte' : 'nopți'} × {guests.adults} ad.{guests.children > 0 ? ` + ${guests.children} copii (50%)` : ''})</span>
                                     <span>{pricingInfo.total} RON</span>
                                 </div>
                             </div>
@@ -508,7 +511,7 @@ const CampingBookingPage = () => {
                                     <span className="price-label">total</span>
                                 </div>
                                 <p className="price-breakdown">
-                                    {totalGuests} {totalGuests === 1 ? 'persoană' : 'persoane'} × {pricingInfo.nights} {pricingInfo.nights === 1 ? 'noapte' : 'nopți'}
+                                    {guests.adults} ad.{guests.children > 0 ? ` + ${guests.children} copii (50%)` : ''} × {pricingInfo.nights} {pricingInfo.nights === 1 ? 'noapte' : 'nopți'}
                                 </p>
                             </>
                         ) : (
