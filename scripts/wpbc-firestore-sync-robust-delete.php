@@ -149,7 +149,8 @@ function wpbc_cat_sync_restore( $params, $action_result ) {
 			if ( $category_id ) {
 				wpbc_firestore_push( $booking_id, $category_id, (string) $details['resource_id'], $details['dates'] );
 			}
-			$approval = wpbc_pick_first_known_approval( $details['approved'] ?? null, $approval_from_action );
+			// Preserve previous canonical approval unless action explicitly provides one.
+			$approval = wpbc_pick_first_known_approval( $approval_from_action );
 			wpbc_sync_order_and_user_status( $booking_id, $approval, 'restore' );
 			continue;
 		}
@@ -260,8 +261,6 @@ function wpbc_reconcile_recent_booking_statuses() {
 		$approval_raw = null;
 		if ( array_key_exists( 'approved', $row ) ) {
 			$approval_raw = $row['approved'];
-		} elseif ( array_key_exists( 'is_new', $row ) ) {
-			$approval_raw = ( (int) $row['is_new'] > 0 ) ? 0 : 1;
 		}
 
 		$approval = wpbc_normalize_approval_status( $approval_raw );
@@ -377,12 +376,16 @@ function wpbc_apply_user_delete_policy( $booking_id, $approval, $order, $access_
 	$user_doc = wpbc_firestore_get_document( $user_doc_path, $access_token );
 	$decoded = is_array( $user_doc ) ? wpbc_firestore_decode_fields( $user_doc ) : array();
 	$effective_approval = wpbc_normalize_approval_status( $approval );
+	$existing_status = strtolower( trim( (string) ( $decoded['status'] ?? '' ) ) );
 
-	if ( null === $effective_approval && ! empty( $decoded ) ) {
-		$existing_status = strtolower( trim( (string) ( $decoded['status'] ?? '' ) ) );
-		if ( in_array( $existing_status, array( 'pending', 'awaiting_approval', 'unapproved', 'in asteptare' ), true ) ) {
-			$effective_approval = 'pending';
-		}
+	// If account status is pending-like, always treat delete as pending delete.
+	// This prevents stale order.wpApproval from forcing "cancelled" UI.
+	if ( in_array( $existing_status, array( 'pending', 'awaiting_approval', 'unapproved', 'in asteptare', 'in_asteptare' ), true ) ) {
+		$effective_approval = 'pending';
+	}
+
+	if ( null === $effective_approval && in_array( $existing_status, array( 'confirmed', 'approved' ), true ) ) {
+		$effective_approval = 'confirmed';
 	}
 
 	// Strict rule: keep as "cancelled/anulat" ONLY when delete happened for an explicitly confirmed booking.
@@ -399,7 +402,7 @@ function wpbc_apply_user_delete_policy( $booking_id, $approval, $order, $access_
 		return;
 	}
 
-	$current_status = strtolower( trim( (string) ( $decoded['status'] ?? '' ) ) );
+	$current_status = $existing_status;
 	$current_wp_approval = strtolower( trim( (string) ( $decoded['wpApproval'] ?? '' ) ) );
 	$target_wp_approval = 'confirmed';
 
@@ -1017,9 +1020,6 @@ function wpbc_db_lookup( $booking_id ) {
 	$approved_raw = null;
 	if ( array_key_exists( 'approved', $row ) ) {
 		$approved_raw = $row['approved'];
-	} elseif ( array_key_exists( 'is_new', $row ) ) {
-		// Some WPBC versions expose "is_new" instead of approved.
-		$approved_raw = ( (int) $row['is_new'] > 0 ) ? 0 : 1;
 	}
 
 	$date_rows = $wpdb->get_col(
