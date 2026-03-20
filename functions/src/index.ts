@@ -289,12 +289,131 @@ function hasBookingOverlap(
     });
 }
 
-function getPricePerNight(priceField: unknown): number {
-    if (typeof priceField === "number") return Math.max(0, Math.floor(priceField));
-    const text = String(priceField ?? "");
+// ─── Hybrid Pricing Helpers ─────────────────────────────────────────────────
+
+interface PricingRule {
+    from: string;
+    to: string;
+    price: number;
+    label?: string;
+}
+
+interface NightPrice {
+    date: string;
+    price: number;
+    source: "override" | "rule" | "base";
+    label?: string;
+}
+
+function getBasePrice(roomData: Record<string, unknown>): number {
+    if (typeof roomData.basePrice === "number") return Math.max(0, Math.floor(roomData.basePrice));
+    // Fallback: parse old string "250 RON"
+    const text = String(roomData.price ?? "");
     const match = text.match(/\d+/g);
     if (!match) return 0;
     return Math.max(0, parseInt(match.join(""), 10));
+}
+
+function resolveNightlyPrice(
+    dateStr: string,
+    dayOfMonth: string,
+    basePrice: number,
+    pricingRules: PricingRule[],
+    monthlyOverrides: Record<string, number> | null
+): NightPrice {
+    // 1. Per-day override
+    if (monthlyOverrides && monthlyOverrides[dayOfMonth] !== undefined) {
+        return { date: dateStr, price: monthlyOverrides[dayOfMonth], source: "override" };
+    }
+    // 2. Seasonal pricing rule (first match)
+    for (const rule of pricingRules) {
+        if (dateStr >= rule.from && dateStr <= rule.to) {
+            const result: NightPrice = { date: dateStr, price: rule.price, source: "rule" };
+            if (rule.label) result.label = rule.label;
+            return result;
+        }
+    }
+    // 3. Base price
+    return { date: dateStr, price: basePrice, source: "base" };
+}
+
+async function fetchMonthlyOverridesServer(
+    roomId: string,
+    yearMonth: string
+): Promise<Record<string, number> | null> {
+    try {
+        const ref = db.collection("rooms").doc(roomId).collection("pricing").doc(yearMonth);
+        const snap = await ref.get();
+        return snap.exists ? (snap.data() as Record<string, number>) : null;
+    } catch {
+        return null;
+    }
+}
+
+async function calculateHybridTotal(
+    startDate: Date,
+    endDate: Date,
+    roomId: string,
+    roomData: Record<string, unknown>,
+    bookingType: "room" | "camping",
+    adults: number,
+    children: number
+): Promise<{ nights: NightPrice[]; total: number; nightCount: number }> {
+    const basePrice = getBasePrice(roomData);
+    const pricingRules: PricingRule[] = Array.isArray(roomData.pricingRules)
+        ? (roomData.pricingRules as PricingRule[])
+        : [];
+
+    // Collect unique months we need overrides for
+    const monthsNeeded = new Set<string>();
+    const cursor = new Date(startDate);
+    const end = new Date(endDate);
+    while (cursor < end) {
+        const y = cursor.getUTCFullYear();
+        const m = String(cursor.getUTCMonth() + 1).padStart(2, "0");
+        monthsNeeded.add(`${y}-${m}`);
+        cursor.setUTCDate(cursor.getUTCDate() + 1);
+    }
+
+    // Fetch all monthly overrides in parallel
+    const overridesMap = new Map<string, Record<string, number> | null>();
+    const fetches = Array.from(monthsNeeded).map(async (ym) => {
+        const data = await fetchMonthlyOverridesServer(roomId, ym);
+        overridesMap.set(ym, data);
+    });
+    await Promise.all(fetches);
+
+    // Calculate per-night prices
+    const nights: NightPrice[] = [];
+    let perNightTotal = 0;
+    const nightCursor = new Date(startDate);
+    while (nightCursor < end) {
+        const y = nightCursor.getUTCFullYear();
+        const mNum = nightCursor.getUTCMonth() + 1;
+        const d = nightCursor.getUTCDate();
+        const monthKey = `${y}-${String(mNum).padStart(2, "0")}`;
+        const dateStr = `${y}-${String(mNum).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+        const dayStr = String(d).padStart(2, "0");
+
+        const overrides = overridesMap.get(monthKey) ?? null;
+        const resolved = resolveNightlyPrice(dateStr, dayStr, basePrice, pricingRules, overrides);
+        nights.push(resolved);
+        perNightTotal += resolved.price;
+
+        nightCursor.setUTCDate(nightCursor.getUTCDate() + 1);
+    }
+
+    // Apply guest multiplier: camping is per-person (kids half price)
+    let total: number;
+    if (bookingType === "camping") {
+        const effectiveGuests = adults + children * 0.5;
+        total = Math.round(perNightTotal * effectiveGuests);
+    } else {
+        // Rooms are per-room, not per-person
+        total = perNightTotal;
+    }
+
+    return { nights, total, nightCount: nights.length };
 }
 
 function getNights(startDate: Date, endDate: Date): number {
@@ -922,7 +1041,7 @@ export const createBookingAndReserve = onCall(
 
         const roomData = roomSnap.data() || {};
         const roomTitle = String(roomData.title || `Room ${roomId}`);
-        const pricePerNight = getPricePerNight(roomData.price);
+        // Hybrid pricing: resolved after dates are validated
 
         let unitRef: admin.firestore.DocumentReference | null = null;
         let initialUnitName: string | null = null;
@@ -1029,9 +1148,11 @@ export const createBookingAndReserve = onCall(
         }
 
         const nights = getNights(startDate, endDate);
-        const totalPrice = bookingType === "camping"
-            ? (adults + children) * nights * pricePerNight
-            : nights * pricePerNight;
+        const hybridResult = await calculateHybridTotal(
+            startDate, endDate, String(roomId), roomData,
+            bookingType, adults, children
+        );
+        const totalPrice = hybridResult.total;
 
         const createdAtIso = new Date().toISOString();
 
@@ -1149,7 +1270,7 @@ export const createBookingAndReserve = onCall(
                     wpApproval: "pending",
                     wpSyncUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
                     syncStatus: "synced",
-                    pricePerNight,
+                    pricePerNight: hybridResult.nightCount > 0 ? Math.round(hybridResult.total / hybridResult.nightCount) : 0,
                     nights,
                     totalPrice,
                     correlationId,
@@ -1237,7 +1358,7 @@ export const createBookingAndReserve = onCall(
                 endDateStr,
                 adults,
                 children,
-                pricePerNight,
+                pricePerNight: hybridResult.nightCount > 0 ? Math.round(hybridResult.total / hybridResult.nightCount) : 0,
                 nights,
                 totalPrice,
                 lastSyncError: localSyncError,
