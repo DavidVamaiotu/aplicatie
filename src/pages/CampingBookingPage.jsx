@@ -3,7 +3,7 @@ import { createBooking } from '../services/api';
 import { getBookingCaptchaToken } from '../services/captchaService';
 import { useAuth } from '../context/AuthContext';
 import { auth } from '../firebase';
-import { fetchMonthlyOverrides, buildDayPricesMap, calculateRangeTotal, ensureOverridesForMonths, groupBreakdownNights } from '../services/pricingService';
+import { fetchMonthlyOverrides, buildDayPricesMap, calculateRangeTotal, ensureOverridesForMonths } from '../services/pricingService';
 import { useParams, useNavigate } from 'react-router-dom';
 import { format, addDays, isSameDay, differenceInDays } from 'date-fns';
 import { getItemById } from '../data/rooms';
@@ -406,45 +406,6 @@ const CampingBookingPage = () => {
                             </div>
                         </div>
                     </div>
-
-                    {/* Itemized Price Breakdown */}
-                    {pricingInfo && (
-                        <div className="modern-card p-6 animate-slide-up" style={{ animationDelay: '0.25s' }}>
-                            <h2 className="font-bold text-lg text-gray-900 mb-4 flex items-center gap-2">
-                                <Tag size={18} className="text-primary" />
-                                Detalii Preț
-                            </h2>
-                            <div className="price-breakdown-list">
-                                {groupBreakdownNights(pricingInfo.breakdown).map((group, i) => (
-                                    <div key={i} className="price-breakdown-row">
-                                        <span className="price-breakdown-date">
-                                            {group.count === 1
-                                                ? format(new Date(group.from + 'T00:00:00'), 'dd MMM')
-                                                : `${format(new Date(group.from + 'T00:00:00'), 'dd')}–${format(new Date(group.to + 'T00:00:00'), 'dd MMM')}`
-                                            }
-                                        </span>
-                                        <span className="price-breakdown-amount">
-                                            {group.count === 1
-                                                ? `${group.price} × ${effectiveGuests} = ${Math.round(group.price * effectiveGuests)} RON`
-                                                : `${group.price} × ${group.count} nopți × ${effectiveGuests} = ${Math.round(group.subtotal * effectiveGuests)} RON`
-                                            }
-                                            {group.label && (
-                                                <span className="price-breakdown-label"> ({group.label})</span>
-                                            )}
-                                            {group.source === 'override' && !group.label && (
-                                                <span className="price-breakdown-label"> (Preț special)</span>
-                                            )}
-                                        </span>
-                                    </div>
-                                ))}
-                                <div className="price-breakdown-divider"></div>
-                                <div className="price-breakdown-row price-breakdown-total">
-                                    <span>Total ({pricingInfo.nights} {pricingInfo.nights === 1 ? 'noapte' : 'nopți'} × {guests.adults} ad.{guests.children > 0 ? ` + ${guests.children} copii (50%)` : ''})</span>
-                                    <span>{pricingInfo.total} RON</span>
-                                </div>
-                            </div>
-                        </div>
-                    )}
 
                     {/* Personal Details Form */}
                     <div className="modern-card p-6 animate-slide-up" style={{ animationDelay: '0.3s' }}>
